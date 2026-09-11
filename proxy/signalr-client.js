@@ -517,22 +517,52 @@ function processPosition(data) {
     console.log(`[signalr] Position.z: ${positionMsgCount} messages received`);
   }
 
-  if (!currentStateRef.location) currentStateRef.location = {};
-  let changed = false;
-
-  for (const frame of payload.Position) {
-    if (!frame?.Entries) continue;
-    for (const [num, coords] of Object.entries(frame.Entries)) {
-      if (coords?.X != null && coords?.Y != null) {
-        currentStateRef.location[String(num)] = { x: coords.X, y: coords.Y };
-        // Seal timestamp so MQTT handleLocation won't override SignalR GPS
-        currentStateRef.locationSignalRTs = Date.now();
-        currentStateRef.locationSource = "signalr";
-        changed = true;
-      }
+  // Each message packs ~1s of samples (3-5 frames, ~250ms apart). Applying
+  // them all at once collapses to the last frame and the track map only gets
+  // one target per second — cars visibly sprint-and-stall. Replay the frames
+  // at their own timestamp offsets instead, so the map keeps the ~4 Hz
+  // cadence it had with OpenF1 MQTT (costs <1s of extra latency).
+  const frames = payload.Position.filter((f) => f?.Entries);
+  if (!frames.length) return;
+  const firstTs = Date.parse(frames[0].Timestamp);
+  for (const frame of frames) {
+    const ts = Date.parse(frame.Timestamp);
+    const offset =
+      Number.isFinite(firstTs) && Number.isFinite(ts)
+        ? Math.min(Math.max(ts - firstTs, 0), 1500)
+        : 0;
+    if (offset === 0) {
+      applyPositionFrame(frame);
+    } else {
+      const timer = setTimeout(() => {
+        pendingPositionFrames.delete(timer);
+        applyPositionFrame(frame);
+      }, offset);
+      pendingPositionFrames.add(timer);
     }
   }
+}
 
+const pendingPositionFrames = new Set();
+
+function clearPendingPositionFrames() {
+  for (const timer of pendingPositionFrames) clearTimeout(timer);
+  pendingPositionFrames.clear();
+}
+
+function applyPositionFrame(frame) {
+  if (!currentStateRef || !isRunning) return;
+  if (!currentStateRef.location) currentStateRef.location = {};
+  let changed = false;
+  for (const [num, coords] of Object.entries(frame.Entries)) {
+    if (coords?.X != null && coords?.Y != null) {
+      currentStateRef.location[String(num)] = { x: coords.X, y: coords.Y };
+      // Seal timestamp so MQTT handleLocation won't override SignalR GPS
+      currentStateRef.locationSignalRTs = Date.now();
+      currentStateRef.locationSource = "signalr";
+      changed = true;
+    }
+  }
   if (changed && broadcastFn) broadcastFn("update", currentStateRef);
 }
 
@@ -742,6 +772,7 @@ export function stopSignalR() {
   ws?.close();
   ws = null;
   positionMsgCount = 0;
+  clearPendingPositionFrames();
   if (currentStateRef) currentStateRef.locationSignalRTs = null;
   broadcastFn = null;
   currentStateRef = null;

@@ -48,6 +48,31 @@ interface TrackMapProps {
 const SPACE = 1000;
 const ROTATION_FIX = 90;
 
+interface TargetPosition {
+  targetIndex: number;
+  inPit: boolean;
+  hasFix: boolean;
+  // Raw GPS fix this target came from (absent for mini-sector/estimate
+  // targets). A change in x/y marks a new sample for the playback buffer.
+  gps?: { x: number; y: number };
+}
+
+// GPS playback runs this far behind the newest fix. Fixes arrive ~4 Hz with
+// jitter (SignalR batches ~1s of samples); rendering at a fixed delay and
+// interpolating between the two samples around that instant means the car
+// always has a point ahead and never catches up and stalls.
+const GPS_RENDER_DELAY_MS = 750;
+// If the buffer runs dry (fix gap longer than the delay), keep rolling at the
+// last measured speed for at most this long before holding.
+const GPS_MAX_EXTRAPOLATION_MS = 1500;
+// Drop buffered samples older than this
+const GPS_BUFFER_MAX_AGE_MS = 5000;
+
+interface GpsSample {
+  t: number; // performance.now() at arrival
+  idx: number; // fractional track index
+}
+
 // Same resolution as useF1DataSSE: direct proxy URL if baked in, else the
 // same-origin Next.js rewrite.
 const PROXY_URL = process.env.NEXT_PUBLIC_PROXY_URL || "/api/proxy";
@@ -151,6 +176,7 @@ export default function TrackMap({
 
     // Clear animated positions when circuit changes to force recalculation
     animatedPositionsRef.current.clear();
+    gpsBufferRef.current.clear();
     setAnimatedPositions(new Map());
 
     setLoading(true);
@@ -170,6 +196,7 @@ export default function TrackMap({
       isSessionActive,
     );
     animatedPositionsRef.current.clear();
+    gpsBufferRef.current.clear();
     setAnimatedPositions(new Map());
   }, [qualifyingPart, isSessionActive]);
 
@@ -380,6 +407,10 @@ export default function TrackMap({
   >(new Map());
   const animationFrameRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(performance.now());
+  // Per-driver GPS playback buffer (see GPS_RENDER_DELAY_MS)
+  const gpsBufferRef = useRef<
+    Map<string, { samples: GpsSample[]; lastX: number; lastY: number }>
+  >(new Map());
   const [animatedPositions, setAnimatedPositions] = useState<
     Map<string, { x: number; y: number; inPit: boolean }>
   >(new Map());
@@ -388,13 +419,13 @@ export default function TrackMap({
   // Calculate target positions based on driver data (this is the "goal" for animation)
   const targetPositions = useMemo(() => {
     if (!points || points.length === 0 || !bounds)
-      return new Map<string, { targetIndex: number; inPit: boolean; hasFix: boolean }>();
+      return new Map<string, TargetPosition>();
 
     const miniSectorIndexes = mapData?.miniSectorsIndexes || [];
     const totalPoints = points.length;
     const pitLaneEndIndex = Math.min(Math.floor(totalPoints * 0.05), 50);
 
-    const targets = new Map<string, { targetIndex: number; inPit: boolean; hasFix: boolean }>();
+    const targets = new Map<string, TargetPosition>();
     let pitIndex = 0;
     const pitDriverCount = Math.max(
       20,
@@ -440,10 +471,35 @@ export default function TrackMap({
             nearestIdx = i;
           }
         }
+        // Project onto the segment before/after the nearest point for a
+        // fractional index — snapping to whole points (~15m apart) turns a
+        // smooth 4 Hz feed into visible steps.
+        let fractionalIdx = nearestIdx;
+        let bestSegDist = Infinity;
+        for (const dir of [-1, 1]) {
+          const a = points[nearestIdx];
+          const b = points[(nearestIdx + dir + totalPoints) % totalPoints];
+          const abx = b.x - a.x;
+          const aby = b.y - a.y;
+          const len2 = abx * abx + aby * aby;
+          if (len2 === 0) continue;
+          const tRaw =
+            ((rotated.x - a.x) * abx + (rotated.y - a.y) * aby) / len2;
+          const tSeg = Math.max(0, Math.min(1, tRaw));
+          const px = a.x + abx * tSeg;
+          const py = a.y + aby * tSeg;
+          const d = (px - rotated.x) ** 2 + (py - rotated.y) ** 2;
+          if (d < bestSegDist) {
+            bestSegDist = d;
+            fractionalIdx =
+              (nearestIdx + dir * tSeg + totalPoints) % totalPoints;
+          }
+        }
         targets.set(driver.driverNumber, {
-          targetIndex: nearestIdx,
+          targetIndex: fractionalIdx,
           inPit: false,
           hasFix: true,
+          gps: { x: driver.trackX!, y: driver.trackY! },
         });
         return;
       }
@@ -521,6 +577,66 @@ export default function TrackMap({
     [points],
   );
 
+  // Feed a GPS target into the driver's buffer and return the fractional
+  // track index to draw at (now - GPS_RENDER_DELAY_MS), or null if there is
+  // nothing to play yet.
+  const playGpsBuffer = useCallback(
+    (driverNumber: string, target: TargetPosition, now: number) => {
+      if (!points || !target.gps) return null;
+      const totalPoints = points.length;
+      let buf = gpsBufferRef.current.get(driverNumber);
+      if (!buf) {
+        buf = { samples: [], lastX: NaN, lastY: NaN };
+        gpsBufferRef.current.set(driverNumber, buf);
+      }
+
+      // New fix? (targets are recomputed on every SSE update, most of which
+      // carry no new GPS — only a coordinate change is a new sample)
+      if (target.gps.x !== buf.lastX || target.gps.y !== buf.lastY) {
+        buf.lastX = target.gps.x;
+        buf.lastY = target.gps.y;
+        buf.samples.push({ t: now, idx: target.targetIndex });
+        while (
+          buf.samples.length > 1 &&
+          now - buf.samples[0].t > GPS_BUFFER_MAX_AGE_MS
+        ) {
+          buf.samples.shift();
+        }
+      }
+
+      const samples = buf.samples;
+      if (samples.length === 0) return null;
+      const renderTime = now - GPS_RENDER_DELAY_MS;
+
+      // Forward-only distance between two indices; a step backwards is GPS
+      // noise, not a reversal, so it plays as a hold.
+      const forward = (from: number, to: number) => {
+        const d = (to - from + totalPoints) % totalPoints;
+        return d > totalPoints / 2 ? 0 : d;
+      };
+
+      if (renderTime <= samples[0].t) return samples[0].idx;
+
+      for (let i = 0; i < samples.length - 1; i++) {
+        const a = samples[i];
+        const b = samples[i + 1];
+        if (renderTime >= a.t && renderTime < b.t) {
+          const f = (renderTime - a.t) / (b.t - a.t);
+          return (a.idx + forward(a.idx, b.idx) * f) % totalPoints;
+        }
+      }
+
+      // Buffer starved: extrapolate briefly at the last measured speed
+      const last = samples[samples.length - 1];
+      const prev = samples.length > 1 ? samples[samples.length - 2] : null;
+      const overrun = Math.min(renderTime - last.t, GPS_MAX_EXTRAPOLATION_MS);
+      if (!prev || last.t - prev.t <= 0) return last.idx;
+      const speed = forward(prev.idx, last.idx) / (last.t - prev.t); // idx per ms
+      return (last.idx + speed * overrun) % totalPoints;
+    },
+    [points],
+  );
+
   // Animation loop for smooth movement along track points
   const animate = useCallback(() => {
     if (!points || points.length === 0) {
@@ -559,6 +675,7 @@ export default function TrackMap({
 
       // 1. If the driver is in pit, snap them instantly to their pit box coordinate (no transitions, sliding or floating)
       if (target.inPit) {
+        gpsBufferRef.current.delete(driverNumber);
         if (!current.inPit || current.currentIndex !== target.targetIndex) {
           current.inPit = true;
           current.currentIndex = target.targetIndex;
@@ -572,7 +689,29 @@ export default function TrackMap({
           hasChanges = true;
         }
 
-        // 3. For on-track cars: animate using circular shortest-path interpolation
+        // 3a. GPS: delayed playback. Buffer fixes as they arrive and render
+        // the position at (now - delay), interpolating between the two
+        // samples around that instant. No chasing, no catch-up stalls.
+        if (target.gps) {
+          const playback = playGpsBuffer(driverNumber, target, now);
+          if (playback !== null) {
+            if (Math.abs(playback - current.currentIndex) > 0.001) {
+              current.currentIndex = playback;
+              hasChanges = true;
+            }
+            const interpolatedGps = getInterpolatedPoint(current.currentIndex);
+            newPositions.set(driverNumber, {
+              x: interpolatedGps.x,
+              y: interpolatedGps.y,
+              inPit: false,
+            });
+            return;
+          }
+        } else {
+          gpsBufferRef.current.delete(driverNumber);
+        }
+
+        // 3b. Non-GPS targets: animate using circular shortest-path interpolation
         // This solves GPS fluctuations, finish line wrap-arounds, and backward steps mathematically
         let diff = target.targetIndex - current.currentIndex;
         diff = (diff + totalPoints / 2) % totalPoints;
@@ -640,7 +779,13 @@ export default function TrackMap({
     }
 
     animationFrameRef.current = requestAnimationFrame(animate);
-  }, [points, targetPositions, getInterpolatedPoint, animatedPositions.size]);
+  }, [
+    points,
+    targetPositions,
+    getInterpolatedPoint,
+    playGpsBuffer,
+    animatedPositions.size,
+  ]);
   // Start animation loop
   useEffect(() => {
     if (points && points.length > 0) {
