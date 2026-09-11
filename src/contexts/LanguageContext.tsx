@@ -23,7 +23,7 @@ const translations = {
 
     // TimingBoard
     "timing.driver": "Piloto",
-    "timing.drs": "DRS",
+    "timing.pit": "PIT",
     "timing.tire": "Neumático",
     "timing.position": "+/-",
     "timing.gap": "Diferencia",
@@ -241,7 +241,7 @@ const translations = {
 
     // TimingBoard
     "timing.driver": "Driver",
-    "timing.drs": "DRS",
+    "timing.pit": "PIT",
     "timing.tire": "Tire",
     "timing.position": "+/-",
     "timing.gap": "Gap",

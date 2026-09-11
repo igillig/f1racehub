@@ -182,7 +182,7 @@ export default function TimingBoard({
             style={{ gridTemplateColumns: gridCols }}
           >
             <div>{t("timing.driver")}</div>
-            <div className="text-center">{t("timing.drs")}</div>
+            <div className="text-center">{t("timing.pit")}</div>
             <div>{t("timing.tire")}</div>
             <button
               className="text-right flex items-center justify-end gap-1 w-full cursor-pointer hover:text-foreground transition-colors"
