@@ -58,6 +58,7 @@ interface RawDriver {
 }
 
 interface RawMeeting {
+  meeting_key: number;
   meeting_name: string;
   date_start?: string;
   year?: number;
@@ -74,13 +75,32 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // to the proxy (which forwards with paid-tier auth — no rate limit).
 // Callers should invoke these sequentially, not in parallel, to stay under the
 // burst limit in the first place.
+// While a session is live, OpenF1 locks its REST API to paid accounts (503
+// for everyone else). Once we see that, skip straight to the proxy for the
+// rest of the page load instead of burning retries on every request.
+let preferProxy = false;
+
+async function fetchViaProxy<T>(path: string): Promise<T> {
+  const r = await fetch(`${PROXY}/${path}`);
+  if (r.status === 404) return [] as unknown as T;
+  if (!r.ok) throw new Error(`proxy ${r.status}`);
+  return (await r.json()) as T;
+}
+
 async function fetchJSON<T>(path: string, retries = 2): Promise<T> {
+  if (preferProxy) return fetchViaProxy<T>(path);
   for (let attempt = 0; ; attempt++) {
     try {
       const r = await fetch(`${OPENF1}/${path}`);
       if (r.status === 429 && attempt < retries) {
         await sleep(700 * (attempt + 1));
         continue;
+      }
+      // OpenF1 answers 404 "No results found" for empty queries — not an error
+      if (r.status === 404) return [] as unknown as T;
+      if (r.status === 503 || r.status === 401 || r.status === 403) {
+        preferProxy = true;
+        return fetchViaProxy<T>(path);
       }
       if (!r.ok) throw new Error(`${r.status}`);
       return (await r.json()) as T;
@@ -90,9 +110,11 @@ async function fetchJSON<T>(path: string, retries = 2): Promise<T> {
         continue;
       }
       // Last resort: the proxy (authenticated, higher rate limit).
-      const r = await fetch(`${PROXY}/${path}`);
-      if (!r.ok) throw err;
-      return (await r.json()) as T;
+      try {
+        return await fetchViaProxy<T>(path);
+      } catch {
+        throw err;
+      }
     }
   }
 }
@@ -112,15 +134,50 @@ export function useChampionship(): ChampionshipData {
   const load = useCallback(async () => {
     try {
       // Sequential (not Promise.all) to stay under OpenF1's free-tier burst limit.
-      const rawDrivers = await fetchJSON<RawStanding[]>(
-        "championship_drivers?meeting_key=latest",
-      );
-      const rawTeams = await fetchJSON<RawStanding[]>(
-        "championship_teams?meeting_key=latest",
-      );
-      const rawInfo = await fetchJSON<RawDriver[]>("drivers?meeting_key=latest");
       const rawMeetings = await fetchJSON<RawMeeting[]>(
         "meetings?meeting_key=latest",
+      );
+      let meeting: RawMeeting | undefined = rawMeetings[0];
+      let rawDrivers = await fetchJSON<RawStanding[]>(
+        "championship_drivers?meeting_key=latest",
+      );
+      let rawTeams: RawStanding[] = [];
+
+      // Standings for a meeting only exist once its race has been scored.
+      // During a GP weekend `latest` is the ongoing meeting (no standings yet),
+      // so walk back through the season to the most recent scored one.
+      if (rawDrivers.length === 0 && meeting?.date_start) {
+        const seasonYear =
+          meeting.year ?? new Date(meeting.date_start).getFullYear();
+        const season = await fetchJSON<RawMeeting[]>(
+          `meetings?year=${seasonYear}`,
+        );
+        const previous = season
+          .filter(
+            (m) =>
+              m.meeting_key !== meeting!.meeting_key &&
+              m.date_start &&
+              m.date_start < meeting!.date_start!,
+          )
+          .sort((a, b) => (a.date_start! < b.date_start! ? 1 : -1))
+          .slice(0, 3);
+        for (const m of previous) {
+          rawDrivers = await fetchJSON<RawStanding[]>(
+            `championship_drivers?meeting_key=${m.meeting_key}`,
+          );
+          if (rawDrivers.length > 0) {
+            meeting = m;
+            break;
+          }
+        }
+      }
+      if (rawDrivers.length === 0 || !meeting) throw new Error("no standings");
+
+      rawTeams = await fetchJSON<RawStanding[]>(
+        `championship_teams?meeting_key=${meeting.meeting_key}`,
+      );
+      const rawInfo = await fetchJSON<RawDriver[]>(
+        `drivers?meeting_key=${meeting.meeting_key}`,
       );
 
       // A meeting can have several scored sessions (e.g. Sprint + Race); the
@@ -179,7 +236,6 @@ export function useChampionship(): ChampionshipData {
         }))
         .sort((a, b) => a.position - b.position);
 
-      const meeting = rawMeetings[0];
       const year = meeting?.year
         ? meeting.year
         : meeting?.date_start
