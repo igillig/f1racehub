@@ -29,6 +29,9 @@ interface MapData {
     angle: number;
     trackPosition: { x: number; y: number };
   }[];
+  // "openf1-gps" when the proxy generated the outline from a real lap
+  // (circuit missing from multiviewer) — shown to the user as a caveat.
+  source?: string;
 }
 
 interface TrackMapProps {
@@ -89,6 +92,7 @@ export default function TrackMap({
     [drivers],
   );
   const showGpsFallbackBanner = isSessionActive && !hasGpsData;
+  const isGeneratedOutline = mapData?.source === "openf1-gps";
 
   useEffect(() => {
     // Don't attempt fetch until we have a real circuit key
@@ -738,6 +742,14 @@ export default function TrackMap({
       )}
       <div className="relative flex-1 min-h-0 flex items-center justify-center py-0 px-1">
       {weather && <WeatherOverlay weather={weather} />}
+      {isGeneratedOutline && (
+        <div
+          className="absolute bottom-1 left-1.5 z-10 px-1.5 py-0.5 rounded text-[9px] leading-tight text-zinc-400 bg-zinc-900/70 border border-zinc-700/60 pointer-events-none"
+          title={t("map.generatedOutlineHint")}
+        >
+          {t("map.generatedOutline")}
+        </div>
+      )}
       <svg
         viewBox={`${minX} ${minY} ${widthX} ${widthY}`}
         className="w-full h-full"

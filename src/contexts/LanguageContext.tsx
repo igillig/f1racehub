@@ -127,6 +127,9 @@ const translations = {
     "map.error": "Error al cargar el mapa",
     "map.notAvailable": "Mapa no disponible",
     "map.gpsFallback": "Posiciones aproximadas — GPS en vivo no disponible",
+    "map.generatedOutline": "Trazado recreado a partir del GPS",
+    "map.generatedOutlineHint":
+      "El plano oficial de este circuito no está disponible. El trazado se reconstruyó con una vuelta real y puede tener imprecisiones.",
 
     // Footer
     "footer.madeWith": "Hecho con",
@@ -344,6 +347,9 @@ const translations = {
     "map.error": "Error loading map",
     "map.notAvailable": "Map not available",
     "map.gpsFallback": "Estimated positions — live GPS unavailable",
+    "map.generatedOutline": "Track outline rebuilt from GPS",
+    "map.generatedOutlineHint":
+      "The official layout for this circuit is not available. The outline was reconstructed from a real lap and may be imprecise.",
 
     // Footer
     "footer.madeWith": "Made with",
