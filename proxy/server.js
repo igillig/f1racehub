@@ -380,9 +380,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && circuitMatch) {
     const data = await getCircuitMap(circuitMatch[1], currentState.session);
     if (data) {
+      // Tiny and served from memory; don't let browsers pin a stale
+      // rotation/outline after a deploy.
       res.writeHead(200, {
         "Content-Type": "application/json",
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "no-cache",
       });
       res.end(JSON.stringify(data));
     } else {
