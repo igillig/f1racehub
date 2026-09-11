@@ -118,6 +118,11 @@ export default function TrackMap({
   );
   const showGpsFallbackBanner = isSessionActive && !hasGpsData;
   const isGeneratedOutline = mapData?.source === "openf1-gps";
+  // One caveat strip above the map; both notices share it when they coincide
+  const mapNotices = [
+    ...(showGpsFallbackBanner ? [t("map.gpsFallback")] : []),
+    ...(isGeneratedOutline ? [t("map.generatedOutline")] : []),
+  ];
 
   useEffect(() => {
     // Don't attempt fetch until we have a real circuit key
@@ -879,22 +884,17 @@ export default function TrackMap({
 
   return (
     <div className="relative h-full w-full flex flex-col">
-      {showGpsFallbackBanner && (
-        <div className="flex items-center justify-center gap-1.5 px-2 py-0.5 text-[10px] font-medium text-amber-400/80 bg-amber-950/40 border-b border-amber-800/30 shrink-0">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400/60" />
-          {t("map.gpsFallback")}
+      {mapNotices.length > 0 && (
+        <div
+          className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium text-amber-400/90 bg-amber-950/40 border-b border-amber-800/30 shrink-0"
+          title={isGeneratedOutline ? t("map.generatedOutlineHint") : undefined}
+        >
+          <span className="inline-block w-2 h-2 rounded-full bg-amber-400/70" />
+          {mapNotices.join(" · ")}
         </div>
       )}
       <div className="relative flex-1 min-h-0 flex items-center justify-center py-0 px-1">
       {weather && <WeatherOverlay weather={weather} />}
-      {isGeneratedOutline && (
-        <div
-          className="absolute bottom-1.5 left-2 z-10 px-2 py-1 rounded text-[11px] leading-tight text-zinc-300 bg-zinc-900/75 border border-zinc-700/60 pointer-events-none"
-          title={t("map.generatedOutlineHint")}
-        >
-          {t("map.generatedOutline")}
-        </div>
-      )}
       <svg
         viewBox={`${minX} ${minY} ${widthX} ${widthY}`}
         className="w-full h-full"

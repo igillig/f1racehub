@@ -127,7 +127,7 @@ const translations = {
     "map.error": "Error al cargar el mapa",
     "map.notAvailable": "Mapa no disponible",
     "map.gpsFallback": "Posiciones aproximadas — GPS en vivo no disponible",
-    "map.generatedOutline": "Trazado recreado a partir del GPS",
+    "map.generatedOutline": "Mapa no disponible - Trazado recreado a partir del GPS",
     "map.generatedOutlineHint":
       "El plano oficial de este circuito no está disponible. El trazado se reconstruyó con una vuelta real y puede tener imprecisiones.",
 
