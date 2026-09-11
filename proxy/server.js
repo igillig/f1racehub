@@ -13,6 +13,7 @@ import {
   isArchiveDownloading,
 } from "./session-downloader.js";
 import { listSessions } from "./session-store.js";
+import { getCircuitMap } from "./circuit-map.js";
 import {
   startMQTT,
   stopMQTT,
@@ -370,6 +371,27 @@ const server = http.createServer(async (req, res) => {
       );
     });
 
+    return;
+  }
+
+  // Circuit outline fallback for circuits api.multiviewer.app doesn't know
+  // (built from a real GPS lap — see circuit-map.js). 404 until buildable.
+  const circuitMatch = reqUrl.pathname.match(/^\/api\/circuit\/(\d+)$/);
+  if (req.method === "GET" && circuitMatch) {
+    const data = await getCircuitMap(circuitMatch[1], currentState.session);
+    if (data) {
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Cache-Control": "public, max-age=3600",
+      });
+      res.end(JSON.stringify(data));
+    } else {
+      res.writeHead(404, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify({ error: "Circuit outline not available yet" }));
+    }
     return;
   }
 
