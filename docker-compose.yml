@@ -50,6 +50,10 @@ services:
       - "${DASHBOARD_PORT:-3000}:3000"
     environment:
       - INTERNAL_PROXY_URL=http://f1-prod-api:4000
+      # Contact form (see .env.example)
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - CONTACT_TO_EMAIL=${CONTACT_TO_EMAIL:-}
+      - CONTACT_FROM_EMAIL=${CONTACT_FROM_EMAIL:-}
     depends_on:
       proxy:
         condition: service_healthy

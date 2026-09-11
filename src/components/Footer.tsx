@@ -2,6 +2,7 @@
 
 import { useLanguage } from "@/contexts/LanguageContext";
 import SupportModal from "./SupportModal";
+import ContactModal from "./ContactModal";
 
 export default function Footer() {
   const { t } = useLanguage();
@@ -19,6 +20,8 @@ export default function Footer() {
           </a>
           <span className="text-zinc-700">•</span>
           <SupportModal />
+          <span className="text-zinc-700">•</span>
+          <ContactModal />
           <span className="text-zinc-700">•</span>
           v2.0.0
         </span>

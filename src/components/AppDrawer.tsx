@@ -3,9 +3,10 @@
 import { useEffect } from "react";
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { LayoutDashboard, Trophy, GitCompare, User, ChevronLeft } from "lucide-react";
+import { LayoutDashboard, Trophy, GitCompare, User, Mail, ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
+import ContactModal from "./ContactModal";
 
 interface AppDrawerProps {
   open: boolean;
@@ -93,6 +94,19 @@ export default function AppDrawer({ open, onClose }: AppDrawerProps) {
                   </Link>
                 );
               })}
+
+              {/* Contact — opens the modal instead of navigating */}
+              <ContactModal
+                renderTrigger={(openModal) => (
+                  <button
+                    onClick={openModal}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60"
+                  >
+                    <Mail size={16} className="text-zinc-500 shrink-0" />
+                    <span>{t("footer.contact")}</span>
+                  </button>
+                )}
+              />
             </nav>
 
             {/* Footer */}

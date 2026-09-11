@@ -25,6 +25,8 @@ jobs:
           echo "REPLAY_SESSION_KEY=${{ vars.REPLAY_SESSION_KEY }}" >> .env
           echo "F1_LIVETIMING_TOKEN=${{ secrets.F1_LIVETIMING_TOKEN }}" >> .env
           echo "NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}" >> .env
+          echo "RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}" >> .env
+          echo "CONTACT_TO_EMAIL=${{ vars.CONTACT_TO_EMAIL }}" >> .env
           # NEXT_PUBLIC_PROXY_URL is intentionally NOT set: the browser uses the
           # same-origin /api/proxy rewrite so the proxy stays internal. Setting it
           # (especially to localhost) would bake a bad URL into every visitor's bundle.
