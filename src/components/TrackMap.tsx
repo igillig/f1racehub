@@ -744,7 +744,7 @@ export default function TrackMap({
       {weather && <WeatherOverlay weather={weather} />}
       {isGeneratedOutline && (
         <div
-          className="absolute bottom-1 left-1.5 z-10 px-1.5 py-0.5 rounded text-[9px] leading-tight text-zinc-400 bg-zinc-900/70 border border-zinc-700/60 pointer-events-none"
+          className="absolute bottom-1.5 left-2 z-10 px-2 py-1 rounded text-[11px] leading-tight text-zinc-300 bg-zinc-900/75 border border-zinc-700/60 pointer-events-none"
           title={t("map.generatedOutlineHint")}
         >
           {t("map.generatedOutline")}

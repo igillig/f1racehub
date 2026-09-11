@@ -30,6 +30,13 @@ const MAX_CLOSURE_RATIO = 0.08;
 // After a failed build (no completed laps yet, REST locked) retry after this
 const NEGATIVE_CACHE_MS = 60 * 1000;
 
+// Raw GPS comes out roughly north-up; multiviewer picks a per-circuit rotation
+// so the map matches the official layout. Degrees, applied on top of
+// TrackMap's ROTATION_FIX: 270 = quarter turn clockwise on screen.
+const ROTATION_BY_CIRCUIT = {
+  153: 270, // Madring (Madrid)
+};
+
 const memCache = new Map(); // circuitKey -> map data
 const inFlight = new Map(); // circuitKey -> Promise
 const lastFailure = new Map(); // circuitKey -> epoch ms
@@ -176,18 +183,25 @@ async function build(circuitKey, session) {
   return null;
 }
 
+// Rotation overrides are applied at serve time so tweaking the table doesn't
+// require regenerating cached outlines.
+function withRotation(key, data) {
+  const rotation = ROTATION_BY_CIRCUIT[key];
+  return rotation === undefined ? data : { ...data, rotation };
+}
+
 /**
  * Outline for a circuit, or null if it can't be built yet (no completed lap,
  * REST unavailable). `session` is the current proxy state's session object.
  */
 export async function getCircuitMap(circuitKey, session) {
   const key = String(circuitKey);
-  if (memCache.has(key)) return memCache.get(key);
+  if (memCache.has(key)) return withRotation(key, memCache.get(key));
 
   const cached = loadFromDisk(key);
   if (cached) {
     memCache.set(key, cached);
-    return cached;
+    return withRotation(key, cached);
   }
 
   if (!session?.session_key) return null;
@@ -204,10 +218,10 @@ export async function getCircuitMap(circuitKey, session) {
         memCache.set(key, data);
         saveToDisk(key, data);
         lastFailure.delete(key);
-      } else {
-        lastFailure.set(key, Date.now());
+        return withRotation(key, data);
       }
-      return data;
+      lastFailure.set(key, Date.now());
+      return null;
     })
     .catch((err) => {
       console.warn(`[circuit-map] Build failed for circuit ${key}:`, err.message);
