@@ -76,19 +76,175 @@ function deepMerge(target, source) {
   return result;
 }
 
-// Broadcast to all SSE clients
+// ── SSE delivery ──────────────────────────────────────────────────────────────
+// Every data source used to call broadcastSSE() once per incoming message, and
+// each call re-serialised the ENTIRE state (~45 KB measured on a quali session).
+// At the ~18 msg/s a qualifying session produces that is ~810 KB/s per viewer,
+// and client.write() was called without ever checking its return value, so a
+// socket that could not keep up grew an unbounded backlog inside Node. The
+// dashboard then rendered data that was a minute old while the session clock —
+// which self-corrects against Date.now() in useF1DataSSE.ts — stayed accurate.
+// That is exactly the "clock live, table behind, fixed by F5" symptom.
+//
+// Two fixes here:
+//   1. Coalesce. "update" only marks the state dirty; one timer flushes at
+//      10 Hz. Nothing in the UI changes faster than that anyway.
+//   2. Skip, don't queue. A client whose socket already holds MAX_PENDING_BYTES
+//      loses the frame instead of growing a backlog, and receives the full
+//      state on the next frame it can accept — it resyncs with a jump instead
+//      of drifting further behind for the rest of the session.
+
+const BROADCAST_INTERVAL_MS = 100; // 10 Hz
+
+// Keys that change a handful of times per session. Together they are ~28 KB of
+// the ~45 KB payload, so re-sending them 10x/s is pure waste. They go out only
+// when their content actually changed: processData() on the client guards every
+// section with `if (data.<key>)` and merges into refs, so an omitted key simply
+// keeps its previous value.
+const OCCASIONAL_KEYS = [
+  "drivers",
+  "race_control_messages",
+  "team_radio",
+  "weather",
+];
+let lastSentOccasional = {};
+
+// Skip frames for a client holding more than this much unflushed data. Node's
+// default highWaterMark (16 KB) is useless as a signal here — a single frame
+// exceeds it, so write() reports congestion even on a healthy connection.
+const MAX_PENDING_BYTES = 256 * 1024;
+// Past this the socket is not coming back. Drop it and let the browser's
+// EventSource reconnect into a fresh snapshot.
+const KILL_PENDING_BYTES = 4 * 1024 * 1024;
+
+let updatePending = false;
+const delivery = { sent: 0, skipped: 0, dropped: 0, resyncs: 0 };
+
+function sseFrame(event, data) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+// Write one frame honouring backpressure. Returns false if it was not written.
+function writeFrame(client, frame) {
+  if (client.writableEnded || client.destroyed) return false;
+  const pending = client.writableLength;
+  if (pending > KILL_PENDING_BYTES) {
+    delivery.dropped++;
+    console.warn(
+      `[proxy-sse] Dropping client — ${(pending / 1048576).toFixed(1)} MB unflushed`,
+    );
+    client.destroy();
+    return false;
+  }
+  if (pending > MAX_PENDING_BYTES) {
+    client._needsFull = true;
+    delivery.skipped++;
+    return false;
+  }
+  try {
+    client.write(frame);
+  } catch (err) {
+    return false;
+  }
+  delivery.sent++;
+  return true;
+}
+
+function flushUpdate() {
+  updatePending = false;
+  if (sseClients.size === 0) return;
+
+  // Lean frame: everything that changes continuously, plus any occasional key
+  // whose content differs from what we last put on the wire.
+  const lean = {};
+  for (const key of Object.keys(currentState)) {
+    if (OCCASIONAL_KEYS.includes(key)) {
+      const serialised = JSON.stringify(currentState[key]);
+      if (lastSentOccasional[key] === serialised) continue;
+      lastSentOccasional[key] = serialised;
+    }
+    lean[key] = currentState[key];
+  }
+
+  const leanFrame = sseFrame("update", lean);
+  let fullFrame = null; // built only if some client fell behind
+
+  for (const [clientId, connections] of sseClients) {
+    for (const client of connections) {
+      if (client._needsFull) {
+        // This client missed at least one frame, so an occasional key we have
+        // already marked as sent may never have reached it. Send everything.
+        if (fullFrame === null) fullFrame = sseFrame("update", currentState);
+        if (writeFrame(client, fullFrame)) {
+          client._needsFull = false;
+          delivery.resyncs++;
+        }
+      } else {
+        writeFrame(client, leanFrame);
+      }
+      if (client.destroyed || client.writableEnded) connections.delete(client);
+    }
+    if (connections.size === 0) sseClients.delete(clientId);
+  }
+}
+
+setInterval(() => {
+  if (updatePending) flushUpdate();
+}, BROADCAST_INTERVAL_MS).unref();
+
+// Worst per-client backlog right now, in KB — surfaced on /health.
+function maxPendingKB() {
+  let worst = 0;
+  for (const connections of sseClients.values()) {
+    for (const client of connections) {
+      if (client.writableLength > worst) worst = client.writableLength;
+    }
+  }
+  return Math.round(worst / 1024);
+}
+
+// Report congestion, but only when there is something new to say.
+let lastReported = { skipped: 0, dropped: 0 };
+setInterval(() => {
+  if (
+    delivery.skipped === lastReported.skipped &&
+    delivery.dropped === lastReported.dropped
+  )
+    return;
+  console.warn(
+    `[proxy-sse] Congestion: ${delivery.skipped - lastReported.skipped} frames skipped, ` +
+      `${delivery.dropped - lastReported.dropped} clients dropped in the last 10s ` +
+      `(${sseClients.size} viewers, ${delivery.resyncs} resyncs total)`,
+  );
+  lastReported = { skipped: delivery.skipped, dropped: delivery.dropped };
+}, 10_000).unref();
+
+// Broadcast to all SSE clients. "update" is coalesced; control events go out
+// immediately and are never skipped — a client that misses a reset would keep
+// showing the previous session.
 function broadcastSSE(event, data) {
-  const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  sseClients.forEach((connections, clientId) => {
+  if (event === "update") {
+    // The flush reads currentState directly (every source mutates it in place),
+    // so the payload passed here is redundant.
+    updatePending = true;
+    return;
+  }
+
+  updatePending = false; // superseded by the frame below
+  lastSentOccasional = {}; // next update must carry everything again
+
+  const frame = sseFrame(event, data);
+  for (const [clientId, connections] of sseClients) {
     for (const client of connections) {
       try {
-        client.write(message);
+        client.write(frame);
+        client._needsFull = false;
       } catch (err) {
         connections.delete(client);
       }
     }
     if (connections.size === 0) sseClients.delete(clientId);
-  });
+  }
 }
 
 // ── Retirement inference ──────────────────────────────────────────────────────
@@ -304,6 +460,9 @@ const server = http.createServer(async (req, res) => {
       signalrRunning: isSignalRRunning(),
       locationSource: currentState.locationSource ?? "none",
       watchdogRunning: sessionWatchdog !== null,
+      // SSE delivery health — `skipped` climbing means clients cannot keep up
+      // with the stream, `maxPendingKB` is the worst socket's current backlog.
+      delivery: { ...delivery, maxPendingKB: maxPendingKB() },
       archive: {
         downloading: isArchiveDownloading(),
         replayFromDB: isReplayUsingDB(),
@@ -340,7 +499,14 @@ const server = http.createServer(async (req, res) => {
       "X-Accel-Buffering": "no",
     });
 
-    res.write(`event: initial\ndata: ${JSON.stringify(currentState)}\n\n`);
+    // Nagle would hold small frames back waiting for more bytes; for a stream
+    // whose whole point is latency, send them as they are produced.
+    res.socket?.setNoDelay(true);
+
+    // The snapshot carries every key, so the first lean update can legitimately
+    // omit the occasional ones.
+    res.write(sseFrame("initial", currentState));
+    res._needsFull = false;
 
     let connections = sseClients.get(clientId);
     if (!connections) {
