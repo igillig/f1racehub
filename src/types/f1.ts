@@ -39,6 +39,7 @@ export interface Driver {
   trackProgress?: number; // 0-1 position on track for map
   trackX?: number; // X coordinate on track
   trackY?: number; // Y coordinate on track
+  trackT?: number; // Timestamp of that GPS fix (epoch ms, from the data source)
 }
 
 export interface TireInfo {

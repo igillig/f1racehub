@@ -150,7 +150,9 @@ export function useF1DataSSE(): F1DataState {
   >({});
 
   // Car location cache from data.location
-  const carDataRef = useRef<Record<string, { x: number; y: number }>>({});
+  const carDataRef = useRef<
+    Record<string, { x: number; y: number; t?: number }>
+  >({});
 
   // Session-wide max segment counts so all drivers show the same bar count
   const maxSegCounts = useRef<{ s1: number; s2: number; s3: number }>({
@@ -200,7 +202,7 @@ export function useF1DataSSE(): F1DataState {
       if (locationData && typeof locationData === "object") {
         Object.entries(locationData).forEach(([num, loc]: [string, any]) => {
           if (loc?.x !== undefined && loc?.y !== undefined) {
-            carDataRef.current[num] = { x: loc.x, y: loc.y };
+            carDataRef.current[num] = { x: loc.x, y: loc.y, t: loc.t };
           }
         });
       }
@@ -576,6 +578,7 @@ export function useF1DataSSE(): F1DataState {
             trackProgress,
             trackX: carDataRef.current[num]?.x ?? existing?.trackX,
             trackY: carDataRef.current[num]?.y ?? existing?.trackY,
+            trackT: carDataRef.current[num]?.t ?? existing?.trackT,
           };
 
           driversMap.set(num, driver);

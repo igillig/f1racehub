@@ -554,9 +554,13 @@ function applyPositionFrame(frame) {
   if (!currentStateRef || !isRunning) return;
   if (!currentStateRef.location) currentStateRef.location = {};
   let changed = false;
+  // The frame's own timestamp travels with the fix so the client can play it
+  // back on the data's clock instead of guessing from arrival time.
+  const frameTs = Date.parse(frame.Timestamp);
+  const t = Number.isFinite(frameTs) ? frameTs : Date.now();
   for (const [num, coords] of Object.entries(frame.Entries)) {
     if (coords?.X != null && coords?.Y != null) {
-      currentStateRef.location[String(num)] = { x: coords.X, y: coords.Y };
+      currentStateRef.location[String(num)] = { x: coords.X, y: coords.Y, t };
       // Seal timestamp so MQTT handleLocation won't override SignalR GPS
       currentStateRef.locationSignalRTs = Date.now();
       currentStateRef.locationSource = "signalr";

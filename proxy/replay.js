@@ -516,7 +516,8 @@ function processData(data, state) {
     }
   });
   Object.entries(latestLocations).forEach(([num, loc]) => {
-    state.location[num] = { x: loc.x, y: loc.y };
+    // Carry the fix's own timestamp — the track map plays GPS back on it.
+    state.location[num] = { x: loc.x, y: loc.y, t: loc.t };
   });
 
   // race control

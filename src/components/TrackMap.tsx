@@ -54,22 +54,33 @@ interface TargetPosition {
   hasFix: boolean;
   // Raw GPS fix this target came from (absent for mini-sector/estimate
   // targets). A change in x/y marks a new sample for the playback buffer.
-  gps?: { x: number; y: number };
+  gps?: { x: number; y: number; t?: number };
 }
 
-// GPS playback runs this far behind the newest fix. Fixes arrive ~4 Hz with
-// jitter (SignalR batches ~1s of samples); rendering at a fixed delay and
-// interpolating between the two samples around that instant means the car
-// always has a point ahead and never catches up and stalls.
+// GPS playback runs this far behind the newest fix, on the DATA's clock (the
+// timestamp each fix carries), never on arrival time. Arrival is useless for
+// timing: MQTT delivers ~2 Hz fixes in bursts — two 100 ms apart, then ~900 ms
+// of silence — so a speed derived from arrival gaps came out several times too
+// high and the extrapolation below would fire a car around the circuit.
 const GPS_RENDER_DELAY_MS = 750;
 // If the buffer runs dry (fix gap longer than the delay), keep rolling at the
 // last measured speed for at most this long before holding.
 const GPS_MAX_EXTRAPOLATION_MS = 1500;
+// Hard ceiling on extrapolated speed, in track indices per ms, as a multiple of
+// the car's own recent average. A safety net: even on the data clock, one odd
+// pair of samples should never launch a car down the track.
+const GPS_MAX_SPEED_FACTOR = 2;
 // Drop buffered samples older than this
 const GPS_BUFFER_MAX_AGE_MS = 5000;
+// Gap between the playback head and the newest fix beyond which we stop easing
+// and just snap — a feed restart, a seek, or the first fix of a session.
+const GPS_HEAD_SNAP_MS = 4000;
+// Per-frame share of the remaining head error to correct. Small enough that a
+// correction is invisible, large enough to absorb drift within a second or two.
+const GPS_HEAD_EASE = 0.05;
 
 interface GpsSample {
-  t: number; // performance.now() at arrival
+  t: number; // the fix's own timestamp (epoch ms), NOT arrival time
   idx: number; // fractional track index
 }
 
@@ -182,6 +193,7 @@ export default function TrackMap({
     // Clear animated positions when circuit changes to force recalculation
     animatedPositionsRef.current.clear();
     gpsBufferRef.current.clear();
+    gpsHeadRef.current = null;
     setAnimatedPositions(new Map());
 
     setLoading(true);
@@ -202,6 +214,7 @@ export default function TrackMap({
     );
     animatedPositionsRef.current.clear();
     gpsBufferRef.current.clear();
+    gpsHeadRef.current = null;
     setAnimatedPositions(new Map());
   }, [qualifyingPart, isSessionActive]);
 
@@ -412,6 +425,8 @@ export default function TrackMap({
   >(new Map());
   const animationFrameRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(performance.now());
+  // Playback head, in the GPS data clock (epoch ms). Null until the first fix.
+  const gpsHeadRef = useRef<number | null>(null);
   // Per-driver GPS playback buffer (see GPS_RENDER_DELAY_MS)
   const gpsBufferRef = useRef<
     Map<string, { samples: GpsSample[]; lastX: number; lastY: number }>
@@ -504,7 +519,7 @@ export default function TrackMap({
           targetIndex: fractionalIdx,
           inPit: false,
           hasFix: true,
-          gps: { x: driver.trackX!, y: driver.trackY! },
+          gps: { x: driver.trackX!, y: driver.trackY!, t: driver.trackT },
         });
         return;
       }
@@ -586,7 +601,7 @@ export default function TrackMap({
   // track index to draw at (now - GPS_RENDER_DELAY_MS), or null if there is
   // nothing to play yet.
   const playGpsBuffer = useCallback(
-    (driverNumber: string, target: TargetPosition, now: number) => {
+    (driverNumber: string, target: TargetPosition, renderTime: number) => {
       if (!points || !target.gps) return null;
       const totalPoints = points.length;
       let buf = gpsBufferRef.current.get(driverNumber);
@@ -600,18 +615,24 @@ export default function TrackMap({
       if (target.gps.x !== buf.lastX || target.gps.y !== buf.lastY) {
         buf.lastX = target.gps.x;
         buf.lastY = target.gps.y;
-        buf.samples.push({ t: now, idx: target.targetIndex });
-        while (
-          buf.samples.length > 1 &&
-          now - buf.samples[0].t > GPS_BUFFER_MAX_AGE_MS
-        ) {
-          buf.samples.shift();
+        const t = target.gps.t;
+        const newest = buf.samples[buf.samples.length - 1];
+        // A fix with no timestamp has nothing to be played back against, and a
+        // stale one would drag the buffer backwards: drop both rather than
+        // poison the clock. An empty buffer falls through to the estimate path.
+        if (t !== undefined && (!newest || t > newest.t)) {
+          buf.samples.push({ t, idx: target.targetIndex });
+          while (
+            buf.samples.length > 1 &&
+            t - buf.samples[0].t > GPS_BUFFER_MAX_AGE_MS
+          ) {
+            buf.samples.shift();
+          }
         }
       }
 
       const samples = buf.samples;
       if (samples.length === 0) return null;
-      const renderTime = now - GPS_RENDER_DELAY_MS;
 
       // Forward-only distance between two indices; a step backwards is GPS
       // noise, not a reversal, so it plays as a hold.
@@ -636,7 +657,23 @@ export default function TrackMap({
       const prev = samples.length > 1 ? samples[samples.length - 2] : null;
       const overrun = Math.min(renderTime - last.t, GPS_MAX_EXTRAPOLATION_MS);
       if (!prev || last.t - prev.t <= 0) return last.idx;
-      const speed = forward(prev.idx, last.idx) / (last.t - prev.t); // idx per ms
+      let speed = forward(prev.idx, last.idx) / (last.t - prev.t); // idx per ms
+
+      // Never extrapolate much faster than the car has actually been going
+      // across the whole buffer. On the data clock the last-pair speed is
+      // already sane; this only guards against a freak pair.
+      const span = last.t - samples[0].t;
+      if (samples.length > 2 && span > 0) {
+        let travelled = 0;
+        for (let i = 0; i < samples.length - 1; i++) {
+          travelled += forward(samples[i].idx, samples[i + 1].idx);
+        }
+        const average = travelled / span;
+        if (average > 0) {
+          speed = Math.min(speed, average * GPS_MAX_SPEED_FACTOR);
+        }
+      }
+
       return (last.idx + speed * overrun) % totalPoints;
     },
     [points],
@@ -652,6 +689,27 @@ export default function TrackMap({
     const now = performance.now();
     const deltaTime = Math.min((now - lastFrameTimeRef.current) / 1000, 0.1); // seconds, capped at 100ms
     lastFrameTimeRef.current = now;
+
+    // Advance the GPS playback head. It lives on the data's clock and moves
+    // with wall time, easing toward (newest fix - render delay). Driving every
+    // car off one shared head keeps them consistent with each other, and the
+    // easing absorbs the burstiness of the feed without any visible jump.
+    let newestFix = 0;
+    gpsBufferRef.current.forEach((buf) => {
+      const newest = buf.samples[buf.samples.length - 1];
+      if (newest && newest.t > newestFix) newestFix = newest.t;
+    });
+    if (newestFix > 0) {
+      const aim = newestFix - GPS_RENDER_DELAY_MS;
+      const head = gpsHeadRef.current;
+      // First fix, a seek, or a feed restart: no point easing across that gap.
+      if (head === null || Math.abs(aim - head) > GPS_HEAD_SNAP_MS) {
+        gpsHeadRef.current = aim;
+      } else {
+        gpsHeadRef.current =
+          head + deltaTime * 1000 + (aim - head) * GPS_HEAD_EASE;
+      }
+    }
 
     const totalPoints = points.length;
     // Base speed: complete a lap in ~85 seconds
@@ -698,7 +756,7 @@ export default function TrackMap({
         // the position at (now - delay), interpolating between the two
         // samples around that instant. No chasing, no catch-up stalls.
         if (target.gps) {
-          const playback = playGpsBuffer(driverNumber, target, now);
+          const playback = playGpsBuffer(driverNumber, target, gpsHeadRef.current ?? 0);
           if (playback !== null) {
             if (Math.abs(playback - current.currentIndex) > 0.001) {
               current.currentIndex = playback;

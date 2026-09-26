@@ -475,7 +475,16 @@ function handleLocation(data) {
     return;
   const num = String(data.driver_number);
   if (!currentStateRef.location) currentStateRef.location = {};
-  currentStateRef.location[num] = { x: data.x, y: data.y };
+  // `t` is the fix's OWN timestamp, not arrival time. The track map plays GPS
+  // back on a delay and derives speed from the gap between samples; timing it
+  // by arrival made that speed meaningless, because MQTT delivers ~2 Hz fixes
+  // in bursts (two 100 ms apart, then ~900 ms of nothing).
+  const t = Date.parse(data.date);
+  currentStateRef.location[num] = {
+    x: data.x,
+    y: data.y,
+    t: Number.isFinite(t) ? t : Date.now(),
+  };
   currentStateRef.locationSource = "mqtt";
 }
 
