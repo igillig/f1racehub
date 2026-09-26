@@ -40,6 +40,10 @@ export interface Driver {
   trackX?: number; // X coordinate on track
   trackY?: number; // Y coordinate on track
   trackT?: number; // Timestamp of that GPS fix (epoch ms, from the data source)
+  // Every GPS fix delivered in this update, oldest first. The proxy queues them
+  // between SSE flushes so the map gets the full ~3.7 Hz stream, not just the
+  // one fix that survived the flush window.
+  trackFixes?: { x: number; y: number; t: number }[];
 }
 
 export interface TireInfo {

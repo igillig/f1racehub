@@ -21,7 +21,7 @@
 
 import WebSocket from "ws";
 import zlib from "zlib";
-import { ensureTimingEntry } from "./state-utils.js";
+import { ensureTimingEntry, queueLocationFix } from "./state-utils.js";
 import { insertSignalREvent } from "./session-store.js";
 
 const SIGNALR_HOST = "livetiming.formula1.com";
@@ -561,6 +561,7 @@ function applyPositionFrame(frame) {
   for (const [num, coords] of Object.entries(frame.Entries)) {
     if (coords?.X != null && coords?.Y != null) {
       currentStateRef.location[String(num)] = { x: coords.X, y: coords.Y, t };
+      queueLocationFix(currentStateRef, String(num), coords.X, coords.Y, t);
       // Seal timestamp so MQTT handleLocation won't override SignalR GPS
       currentStateRef.locationSignalRTs = Date.now();
       currentStateRef.locationSource = "signalr";

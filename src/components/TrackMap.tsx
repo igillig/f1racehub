@@ -55,6 +55,10 @@ interface TargetPosition {
   // Raw GPS fix this target came from (absent for mini-sector/estimate
   // targets). A change in x/y marks a new sample for the playback buffer.
   gps?: { x: number; y: number; t?: number };
+  // Every fix from this update, already projected onto the track. Present when
+  // the proxy delivered its queue; falls back to the single `gps` sample when
+  // the source doesn't queue (replay) or nothing new arrived.
+  fixes?: { t: number; idx: number }[];
 }
 
 // GPS playback runs this far behind the newest fix, on the DATA's clock (the
@@ -75,9 +79,14 @@ const GPS_BUFFER_MAX_AGE_MS = 5000;
 // Gap between the playback head and the newest fix beyond which we stop easing
 // and just snap — a feed restart, a seek, or the first fix of a session.
 const GPS_HEAD_SNAP_MS = 4000;
-// Per-frame share of the remaining head error to correct. Small enough that a
-// correction is invisible, large enough to absorb drift within a second or two.
-const GPS_HEAD_EASE = 0.05;
+// The head converges on its target by running slightly fast or slow, never by
+// being moved: a position correction lurches the clock every time a fix lands
+// (the target only advances in ~250 ms steps), and a lurching clock is the
+// accelerate-and-brake this is meant to remove. An error of GPS_HEAD_TRIM_SCALE
+// ms buys the full trim, so 250 ms of drift is corrected at 5% — invisible, and
+// gone within a few seconds.
+const GPS_HEAD_MAX_TRIM = 0.05;
+const GPS_HEAD_TRIM_SCALE = 5000;
 
 interface GpsSample {
   t: number; // the fix's own timestamp (epoch ms), NOT arrival time
@@ -147,7 +156,6 @@ export default function TrackMap({
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const fetchMap = async () => {
-      console.log("[TrackMap] Fetching map for circuitKey:", circuitKey);
       setError(null);
 
       // Try years from current down to 2024 — circuit layouts are stable
@@ -206,12 +214,6 @@ export default function TrackMap({
 
   // Clear animated positions when session changes (Q1→Q2→Q3 or session restart)
   useEffect(() => {
-    console.log(
-      "[TrackMap] Session change detected, clearing positions. qualifyingPart:",
-      qualifyingPart,
-      "isSessionActive:",
-      isSessionActive,
-    );
     animatedPositionsRef.current.clear();
     gpsBufferRef.current.clear();
     gpsHeadRef.current = null;
@@ -305,11 +307,6 @@ export default function TrackMap({
       });
     }
 
-    console.log(
-      "[TrackMap] Mini sector boundaries:",
-      boundaries.length,
-      "sectors",
-    );
     return boundaries;
   }, [points, mapData]);
 
@@ -354,11 +351,6 @@ export default function TrackMap({
         end: findIdx(endLen),
       });
     }
-    console.log(
-      "[TrackMap] Marshal sector boundaries:",
-      map.size,
-      "sectors (arc-length method)",
-    );
     return map;
   }, [points, mapData]);
 
@@ -473,53 +465,61 @@ export default function TrackMap({
 
       // Primary: GPS coordinates from OpenF1 MQTT (v1/location), ~3.7 Hz
       if (!hasNoLocationData) {
-        const rotated = rotate(
-          driver.trackX!,
-          driver.trackY!,
-          rotation,
-          centerX,
-          centerY,
-        );
-        let minDist = Infinity;
-        let nearestIdx = 0;
-        for (let i = 0; i < totalPoints; i++) {
-          const dx = points[i].x - rotated.x;
-          const dy = points[i].y - rotated.y;
-          const dist = dx * dx + dy * dy;
-          if (dist < minDist) {
-            minDist = dist;
-            nearestIdx = i;
-          }
-        }
-        // Project onto the segment before/after the nearest point for a
+        // Project a raw GPS coordinate onto the track polyline, returning a
         // fractional index — snapping to whole points (~15m apart) turns a
-        // smooth 4 Hz feed into visible steps.
-        let fractionalIdx = nearestIdx;
-        let bestSegDist = Infinity;
-        for (const dir of [-1, 1]) {
-          const a = points[nearestIdx];
-          const b = points[(nearestIdx + dir + totalPoints) % totalPoints];
-          const abx = b.x - a.x;
-          const aby = b.y - a.y;
-          const len2 = abx * abx + aby * aby;
-          if (len2 === 0) continue;
-          const tRaw =
-            ((rotated.x - a.x) * abx + (rotated.y - a.y) * aby) / len2;
-          const tSeg = Math.max(0, Math.min(1, tRaw));
-          const px = a.x + abx * tSeg;
-          const py = a.y + aby * tSeg;
-          const d = (px - rotated.x) ** 2 + (py - rotated.y) ** 2;
-          if (d < bestSegDist) {
-            bestSegDist = d;
-            fractionalIdx =
-              (nearestIdx + dir * tSeg + totalPoints) % totalPoints;
+        // smooth feed into visible steps.
+        const project = (gx: number, gy: number) => {
+          const rotated = rotate(gx, gy, rotation, centerX, centerY);
+          let minDist = Infinity;
+          let nearestIdx = 0;
+          for (let i = 0; i < totalPoints; i++) {
+            const dx = points[i].x - rotated.x;
+            const dy = points[i].y - rotated.y;
+            const dist = dx * dx + dy * dy;
+            if (dist < minDist) {
+              minDist = dist;
+              nearestIdx = i;
+            }
           }
-        }
+          let fractionalIdx = nearestIdx;
+          let bestSegDist = Infinity;
+          for (const dir of [-1, 1]) {
+            const a = points[nearestIdx];
+            const b = points[(nearestIdx + dir + totalPoints) % totalPoints];
+            const abx = b.x - a.x;
+            const aby = b.y - a.y;
+            const len2 = abx * abx + aby * aby;
+            if (len2 === 0) continue;
+            const tRaw =
+              ((rotated.x - a.x) * abx + (rotated.y - a.y) * aby) / len2;
+            const tSeg = Math.max(0, Math.min(1, tRaw));
+            const px = a.x + abx * tSeg;
+            const py = a.y + aby * tSeg;
+            const d = (px - rotated.x) ** 2 + (py - rotated.y) ** 2;
+            if (d < bestSegDist) {
+              bestSegDist = d;
+              fractionalIdx =
+                (nearestIdx + dir * tSeg + totalPoints) % totalPoints;
+            }
+          }
+          return fractionalIdx;
+        };
+
         targets.set(driver.driverNumber, {
-          targetIndex: fractionalIdx,
+          targetIndex: project(driver.trackX!, driver.trackY!),
           inPit: false,
           hasFix: true,
           gps: { x: driver.trackX!, y: driver.trackY!, t: driver.trackT },
+          // Every fix delivered in this update, so the playback buffer gets the
+          // whole ~3.7 Hz stream instead of whichever single fix survived the
+          // proxy's flush window. Without these the buffer had ~800 ms holes
+          // and cars moved in stop-and-go.
+          fixes: driver.trackFixes?.length
+            ? driver.trackFixes.map((f) => ({
+                t: f.t,
+                idx: project(f.x, f.y),
+              }))
+            : undefined,
         });
         return;
       }
@@ -610,24 +610,35 @@ export default function TrackMap({
         gpsBufferRef.current.set(driverNumber, buf);
       }
 
-      // New fix? (targets are recomputed on every SSE update, most of which
-      // carry no new GPS — only a coordinate change is a new sample)
-      if (target.gps.x !== buf.lastX || target.gps.y !== buf.lastY) {
+      // Ingest whatever this update brought. Only samples strictly newer than
+      // the buffer's newest are taken, which also makes this idempotent — the
+      // animation loop calls it every frame with the same target until the next
+      // SSE update replaces it. A fix with no timestamp has nothing to be
+      // played back against, so it is dropped rather than poison the clock;
+      // an empty buffer falls through to the estimate path.
+      const incoming =
+        target.fixes ??
+        (target.gps.x !== buf.lastX || target.gps.y !== buf.lastY
+          ? target.gps.t !== undefined
+            ? [{ t: target.gps.t, idx: target.targetIndex }]
+            : []
+          : []);
+
+      if (incoming.length > 0) {
         buf.lastX = target.gps.x;
         buf.lastY = target.gps.y;
-        const t = target.gps.t;
-        const newest = buf.samples[buf.samples.length - 1];
-        // A fix with no timestamp has nothing to be played back against, and a
-        // stale one would drag the buffer backwards: drop both rather than
-        // poison the clock. An empty buffer falls through to the estimate path.
-        if (t !== undefined && (!newest || t > newest.t)) {
-          buf.samples.push({ t, idx: target.targetIndex });
-          while (
-            buf.samples.length > 1 &&
-            t - buf.samples[0].t > GPS_BUFFER_MAX_AGE_MS
-          ) {
-            buf.samples.shift();
+        for (const fix of incoming) {
+          const newest = buf.samples[buf.samples.length - 1];
+          if (!newest || fix.t > newest.t) {
+            buf.samples.push({ t: fix.t, idx: fix.idx });
           }
+        }
+        const newestT = buf.samples[buf.samples.length - 1]?.t;
+        while (
+          buf.samples.length > 1 &&
+          newestT - buf.samples[0].t > GPS_BUFFER_MAX_AGE_MS
+        ) {
+          buf.samples.shift();
         }
       }
 
@@ -706,8 +717,12 @@ export default function TrackMap({
       if (head === null || Math.abs(aim - head) > GPS_HEAD_SNAP_MS) {
         gpsHeadRef.current = aim;
       } else {
-        gpsHeadRef.current =
-          head + deltaTime * 1000 + (aim - head) * GPS_HEAD_EASE;
+        const error = aim - head; // positive = playback is running behind
+        const trim = Math.max(
+          -GPS_HEAD_MAX_TRIM,
+          Math.min(GPS_HEAD_MAX_TRIM, error / GPS_HEAD_TRIM_SCALE),
+        );
+        gpsHeadRef.current = head + deltaTime * 1000 * (1 + trim);
       }
     }
 
@@ -927,9 +942,6 @@ export default function TrackMap({
       if (boundary) {
         const sectorPoints = points.slice(boundary.start, boundary.end + 1);
         if (sectorPoints.length > 0) {
-          console.log(
-            `[TrackMap] Drawing marshal sector ${sectorNum}: points ${boundary.start}-${boundary.end}`,
-          );
           return `M${sectorPoints[0].x},${sectorPoints[0].y} ${sectorPoints
             .map((p) => `L${p.x},${p.y}`)
             .join(" ")}`;

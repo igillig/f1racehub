@@ -98,3 +98,30 @@ export function detectSafetyCar(message) {
   }
   return null;
 }
+
+/**
+ * Queue a GPS fix for delivery on the next SSE flush.
+ *
+ * `state.location[num]` is a single slot that keeps only the newest fix, and
+ * every source publishes faster than the proxy flushes (OpenF1 is ~3.7 Hz per
+ * driver against a 100 ms flush), so roughly 45% of the GPS stream used to be
+ * overwritten before it ever left the proxy. The track map was then left with
+ * ~800 ms holes to interpolate across and cars moved in stop-and-go.
+ *
+ * server.js drains these queues after every flush. The cap bounds them for the
+ * case where no client is connected and nothing is draining.
+ */
+const LOCATION_QUEUE_MAX = 12; // ~3 s at 3.7 Hz
+
+export function queueLocationFix(state, num, x, y, t) {
+  if (!state.location_fixes) state.location_fixes = {};
+  let queue = state.location_fixes[num];
+  if (!queue) {
+    queue = [];
+    state.location_fixes[num] = queue;
+  }
+  queue.push({ x, y, t });
+  if (queue.length > LOCATION_QUEUE_MAX) {
+    queue.splice(0, queue.length - LOCATION_QUEUE_MAX);
+  }
+}

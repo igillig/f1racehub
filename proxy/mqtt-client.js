@@ -17,6 +17,7 @@ import {
   getPitWindowStatus,
   flagToTrackStatus,
   detectSafetyCar,
+  queueLocationFix,
 } from "./state-utils.js";
 
 // MQTT Configuration
@@ -479,12 +480,10 @@ function handleLocation(data) {
   // back on a delay and derives speed from the gap between samples; timing it
   // by arrival made that speed meaningless, because MQTT delivers ~2 Hz fixes
   // in bursts (two 100 ms apart, then ~900 ms of nothing).
-  const t = Date.parse(data.date);
-  currentStateRef.location[num] = {
-    x: data.x,
-    y: data.y,
-    t: Number.isFinite(t) ? t : Date.now(),
-  };
+  const parsed = Date.parse(data.date);
+  const t = Number.isFinite(parsed) ? parsed : Date.now();
+  currentStateRef.location[num] = { x: data.x, y: data.y, t };
+  queueLocationFix(currentStateRef, num, data.x, data.y, t);
   currentStateRef.locationSource = "mqtt";
 }
 

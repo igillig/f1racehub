@@ -186,6 +186,16 @@ function flushUpdate() {
     }
     if (connections.size === 0) sseClients.delete(clientId);
   }
+
+  // GPS fixes are a delivery queue, not state: once a frame carries them they
+  // are gone. `location` still holds each driver's newest fix for everything
+  // else. Nothing drains while no client is connected, which is why
+  // queueLocationFix caps each queue.
+  if (currentState.location_fixes) {
+    for (const num of Object.keys(currentState.location_fixes)) {
+      delete currentState.location_fixes[num];
+    }
+  }
 }
 
 setInterval(() => {

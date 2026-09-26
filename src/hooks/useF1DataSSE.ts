@@ -348,6 +348,13 @@ export function useF1DataSSE(): F1DataState {
         setCarData(carDataRaw as Record<string, CarData>);
       }
 
+      // Every GPS fix the proxy queued since its last flush, per driver. The
+      // single `location` slot only carries the newest one; these are the full
+      // stream, and the track map needs them to interpolate without holes.
+      const locationFixes = data.location_fixes as
+        | Record<string, { x: number; y: number; t: number }[]>
+        | undefined;
+
       // ── 10. Timing data → drivers ─────────────────────────────────────────
       const timingData = data.timing;
       if (!timingData || Object.keys(timingData).length === 0) return;
@@ -579,6 +586,8 @@ export function useF1DataSSE(): F1DataState {
             trackX: carDataRef.current[num]?.x ?? existing?.trackX,
             trackY: carDataRef.current[num]?.y ?? existing?.trackY,
             trackT: carDataRef.current[num]?.t ?? existing?.trackT,
+            // Only this update's fixes — no carry-over, they are consumed once.
+            trackFixes: locationFixes?.[num],
           };
 
           driversMap.set(num, driver);

@@ -12,6 +12,7 @@ import {
   getPitWindowStatus,
   flagToTrackStatus,
   detectSafetyCar,
+  queueLocationFix,
 } from "./state-utils.js";
 
 const API_BASE = "https://api.openf1.org/v1";
@@ -284,7 +285,9 @@ async function pollData() {
         }
       }
       for (const [num, data] of latest) {
-        currentStateRef.location[num] = { x: data.x, y: data.y };
+        // Carry the fix's own timestamp — the track map plays GPS back on it.
+        currentStateRef.location[num] = { x: data.x, y: data.y, t: data.t };
+        queueLocationFix(currentStateRef, num, data.x, data.y, data.t);
       }
     }
 
