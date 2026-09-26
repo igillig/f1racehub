@@ -96,18 +96,29 @@ function deepMerge(target, source) {
 
 const BROADCAST_INTERVAL_MS = 100; // 10 Hz
 
-// Keys that change a handful of times per session. Together they are ~28 KB of
-// the ~45 KB payload, so re-sending them 10x/s is pure waste. They go out only
-// when their content actually changed: processData() on the client guards every
-// section with `if (data.<key>)` and merges into refs, so an omitted key simply
-// keeps its previous value.
-const OCCASIONAL_KEYS = [
-  "drivers",
-  "race_control_messages",
-  "team_radio",
-  "weather",
-];
-let lastSentOccasional = {};
+// A frame carries only what actually changed since the last one. Measured on a
+// live race, the full state was 112 KB/s per viewer, of which `timing` alone was
+// 73.6% — and only 1.1 of 22 drivers changed per frame, so ~95% of those bytes
+// were re-sending drivers that had not moved. `car_data` and `location` were
+// identical in 70% of frames, and session/clock/lap_count/track_status in
+// 385 of 386.
+//
+// This is safe without sequence numbers because SSE runs over TCP: a client
+// cannot silently miss a frame. The only two ways to fall out of sync are a
+// frame this proxy deliberately skipped (tracked per client by `_needsFull`,
+// which resends the whole state) and a dropped connection (EventSource
+// reconnects into a fresh `initial`).
+//
+// The client cooperates: processData() guards every section with
+// `if (data.<key>)` and merges timing into a ref, so an omitted key keeps its
+// previous value.
+let lastSent = {}; // key -> last serialised value
+let lastSentTiming = {}; // driver number -> last serialised timing entry
+
+function resetChangeTracking() {
+  lastSent = {};
+  lastSentTiming = {};
+}
 
 // Skip frames for a client holding more than this much unflushed data. Node's
 // default highWaterMark (16 KB) is useless as a signal here — a single frame
@@ -154,16 +165,33 @@ function flushUpdate() {
   updatePending = false;
   if (sseClients.size === 0) return;
 
-  // Lean frame: everything that changes continuously, plus any occasional key
-  // whose content differs from what we last put on the wire.
+  // Lean frame: only what differs from what we last put on the wire.
   const lean = {};
-  for (const key of Object.keys(currentState)) {
-    if (OCCASIONAL_KEYS.includes(key)) {
-      const serialised = JSON.stringify(currentState[key]);
-      if (lastSentOccasional[key] === serialised) continue;
-      lastSentOccasional[key] = serialised;
+  for (const [key, value] of Object.entries(currentState)) {
+    // `timing` gets per-driver granularity — it is the bulk of the payload and
+    // a single driver crossing a sector used to resend all 22.
+    if (key === "timing" && value && typeof value === "object") {
+      const changed = {};
+      for (const [num, entry] of Object.entries(value)) {
+        const serialised = JSON.stringify(entry);
+        if (lastSentTiming[num] === serialised) continue;
+        lastSentTiming[num] = serialised;
+        changed[num] = entry;
+      }
+      if (Object.keys(changed).length > 0) lean.timing = changed;
+      continue;
     }
-    lean[key] = currentState[key];
+
+    const serialised = JSON.stringify(value);
+    if (lastSent[key] === serialised) continue;
+    lastSent[key] = serialised;
+    lean[key] = value;
+  }
+
+  // Nothing moved since the last frame — say nothing.
+  if (Object.keys(lean).length === 0) {
+    drainLocationFixes();
+    return;
   }
 
   const leanFrame = sseFrame("update", lean);
@@ -187,14 +215,17 @@ function flushUpdate() {
     if (connections.size === 0) sseClients.delete(clientId);
   }
 
-  // GPS fixes are a delivery queue, not state: once a frame carries them they
-  // are gone. `location` still holds each driver's newest fix for everything
-  // else. Nothing drains while no client is connected, which is why
-  // queueLocationFix caps each queue.
-  if (currentState.location_fixes) {
-    for (const num of Object.keys(currentState.location_fixes)) {
-      delete currentState.location_fixes[num];
-    }
+  drainLocationFixes();
+}
+
+// GPS fixes are a delivery queue, not state: once a frame carries them they are
+// gone. `location` still holds each driver's newest fix for everything else.
+// Nothing drains while no client is connected, which is why queueLocationFix
+// caps each queue.
+function drainLocationFixes() {
+  if (!currentState.location_fixes) return;
+  for (const num of Object.keys(currentState.location_fixes)) {
+    delete currentState.location_fixes[num];
   }
 }
 
@@ -241,7 +272,7 @@ function broadcastSSE(event, data) {
   }
 
   updatePending = false; // superseded by the frame below
-  lastSentOccasional = {}; // next update must carry everything again
+  resetChangeTracking(); // next update must carry everything again
 
   const frame = sseFrame(event, data);
   for (const [clientId, connections] of sseClients) {

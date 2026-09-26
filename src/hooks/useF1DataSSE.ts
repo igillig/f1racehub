@@ -153,6 +153,11 @@ export function useF1DataSSE(): F1DataState {
   const carDataRef = useRef<
     Record<string, { x: number; y: number; t?: number }>
   >({});
+  // Merged timing for every driver. The proxy only sends drivers whose entry
+  // actually changed (~1 of 22 per frame), so the update alone is not a picture
+  // of the session: session-wide values like the best sector times, and the
+  // driver rows themselves, have to be built from the accumulated state.
+  const timingRef = useRef<Record<string, Record<string, unknown>>>({});
 
   // Session-wide max segment counts so all drivers show the same bar count
   const maxSegCounts = useRef<{ s1: number; s2: number; s3: number }>({
@@ -356,8 +361,20 @@ export function useF1DataSSE(): F1DataState {
         | undefined;
 
       // ── 10. Timing data → drivers ─────────────────────────────────────────
-      const timingData = data.timing;
-      if (!timingData || Object.keys(timingData).length === 0) return;
+      // Merge this update's drivers into the accumulated timing, then work from
+      // the accumulated copy: a frame carries only the drivers that changed, and
+      // an update with no timing at all still has to rebuild the rows so the
+      // track map receives its GPS fixes.
+      if (data.timing) {
+        Object.entries(data.timing).forEach(([num, entry]) => {
+          timingRef.current[num] = {
+            ...timingRef.current[num],
+            ...(entry as Record<string, unknown>),
+          };
+        });
+      }
+      const timingData = timingRef.current;
+      if (Object.keys(timingData).length === 0) return;
 
       // Update session fastest lap tracking before building drivers
       Object.entries(timingData).forEach(([num, entry]: [string, any]) => {
@@ -788,6 +805,7 @@ export function useF1DataSSE(): F1DataState {
       // fresh positions as soon as they arrive.
       setDrivers([]);
       driverListRef.current = {};
+      timingRef.current = {};
       maxSegCounts.current = { s1: 6, s2: 6, s3: 6 };
       sessionFastestLapRef.current = Infinity;
       sessionFastestDriverRef.current = null;
@@ -803,6 +821,7 @@ export function useF1DataSSE(): F1DataState {
       console.log("[SSE] Session reset received — clearing state");
       setDrivers([]);
       driverListRef.current = {};
+      timingRef.current = {};
       carDataRef.current = {};
       maxSegCounts.current = { s1: 6, s2: 6, s3: 6 };
       sessionFastestLapRef.current = Infinity;
