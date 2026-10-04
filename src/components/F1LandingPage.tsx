@@ -230,6 +230,20 @@ export default function F1LandingPage({ onEnterDemo, replaySession, activeViewer
             {activeViewers}
           </span>
         )}
+        <a
+          href="https://www.instagram.com/f1racehub.ok"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 text-zinc-500 hover:text-primary transition-colors"
+          title="Instagram @f1racehub.ok"
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current">
+            <rect x="4" y="4" width="16" height="16" rx="4" strokeWidth="2" stroke="currentColor" fill="none"/>
+            <circle cx="12" cy="12" r="4" fill="currentColor"/>
+            <circle cx="12" cy="12" r="2" fill="none" stroke="currentColor" strokeWidth="0.5"/>
+          </svg>
+          <span className="text-[10px] text-zinc-600 uppercase tracking-wide">@f1racehub.ok</span>
+        </a>
         <LanguageToggle />
       </div>
 
