@@ -1,7 +1,9 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
+import { Instagram, Mail } from "lucide-react";
 import LanguageToggle from "@/components/LanguageToggle";
+import ContactModal from "@/components/ContactModal";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useNextF1Session, OpenF1Session } from "@/hooks/useNextF1Session";
 import { COUNTRY_CODES } from "@/lib/constants";
@@ -22,6 +24,9 @@ interface Props {
 
 const f1Font = { fontFamily: "'Formula1 Display', sans-serif" } as const;
 const f1Wide = { fontFamily: "'Formula1 Display Wide', sans-serif" } as const;
+
+const IG_GRADIENT =
+  "linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)";
 
 const SESSION_NAMES: Record<string, { es: string; en: string }> = {
   "Practice 1": { es: "Práctica 1", en: "Practice 1" },
@@ -178,6 +183,73 @@ const stagger = (i: number) => ({
   transition: { delay: 0.1 + i * 0.1, duration: 0.5, ease: "easeOut" as const },
 });
 
+/** Pill row above the CTA: Instagram + contact form, split by a vertical rule. */
+function SocialBar({ contactLabel }: { contactLabel: string }) {
+  const itemClass =
+    "group relative flex items-center gap-2 rounded-full px-3 sm:px-4 py-1.5 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/20";
+  const labelClass =
+    "text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-zinc-500 transition-colors group-hover:text-zinc-100 whitespace-nowrap";
+
+  // No backdrop-filter on the pill: it would become the containing block for
+  // the contact modal's position:fixed overlay and knock it off-centre.
+  return (
+    <motion.div
+      className="flex items-center rounded-full border border-white/[0.07] bg-white/[0.03] px-1 py-1"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.75, duration: 0.5, ease: "easeOut" }}
+    >
+      <a
+        href="https://www.instagram.com/f1racehub.ok"
+        target="_blank"
+        rel="noopener noreferrer"
+        className={itemClass}
+        title="Instagram @f1racehub.ok"
+      >
+        <span className="relative flex h-4 w-4 items-center justify-center">
+          {/* Brand gradient blooms behind the glyph on hover */}
+          <span
+            aria-hidden
+            className="absolute -inset-1 rounded-[7px] opacity-0 blur-[7px] transition-opacity duration-300 group-hover:opacity-80"
+            style={{ background: IG_GRADIENT }}
+          />
+          <Instagram
+            size={15}
+            strokeWidth={2}
+            className="relative text-zinc-400 transition-colors group-hover:text-white"
+          />
+        </span>
+        <span className={labelClass} style={f1Font}>
+          @f1racehub.ok
+        </span>
+      </a>
+
+      <span className="h-5 w-px flex-none bg-white/[0.09]" aria-hidden />
+
+      <ContactModal
+        renderTrigger={(openModal) => (
+          <button onClick={openModal} className={itemClass}>
+            <span className="relative flex h-4 w-4 items-center justify-center">
+              <span
+                aria-hidden
+                className="absolute -inset-1 rounded-[7px] bg-primary opacity-0 blur-[7px] transition-opacity duration-300 group-hover:opacity-60"
+              />
+              <Mail
+                size={15}
+                strokeWidth={2}
+                className="relative text-zinc-400 transition-colors group-hover:text-white"
+              />
+            </span>
+            <span className={labelClass} style={f1Font}>
+              {contactLabel}
+            </span>
+          </button>
+        )}
+      />
+    </motion.div>
+  );
+}
+
 export default function F1LandingPage({ onEnterDemo, replaySession, activeViewers, proxyAvailable = false }: Props) {
   const { t, language } = useLanguage();
   const { nextSession, weekendSessions, loading, countdown } =
@@ -230,20 +302,6 @@ export default function F1LandingPage({ onEnterDemo, replaySession, activeViewer
             {activeViewers}
           </span>
         )}
-        <a
-          href="https://www.instagram.com/f1racehub.ok"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-zinc-500 hover:text-primary transition-colors"
-          title="Instagram @f1racehub.ok"
-        >
-          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-current">
-            <rect x="4" y="4" width="16" height="16" rx="4" strokeWidth="2" stroke="currentColor" fill="none"/>
-            <circle cx="12" cy="12" r="4" fill="currentColor"/>
-            <circle cx="12" cy="12" r="2" fill="none" stroke="currentColor" strokeWidth="0.5"/>
-          </svg>
-          <span className="text-[10px] text-zinc-600 uppercase tracking-wide">@f1racehub.ok</span>
-        </a>
         <LanguageToggle />
       </div>
 
@@ -417,7 +475,10 @@ export default function F1LandingPage({ onEnterDemo, replaySession, activeViewer
       </main>
 
       {/* CTA */}
-      <footer className="relative z-10 shrink-0 flex flex-col items-center gap-2 sm:gap-3 py-3 sm:py-8 px-4">
+      <footer className="relative z-10 shrink-0 flex flex-col items-center gap-2 sm:gap-4 py-3 sm:py-8 px-4">
+        {/* Instagram + contact, right above the demo button */}
+        <SocialBar contactLabel={t("footer.contact")} />
+
         <AnimatePresence mode="wait">
           {proxyAvailable ? (
             <motion.div
