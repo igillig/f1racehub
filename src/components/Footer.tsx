@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import SupportModal from "./SupportModal";
 import ContactModal from "./ContactModal";
@@ -22,6 +23,14 @@ export default function Footer() {
           <SupportModal />
           <span className="text-zinc-700">•</span>
           <ContactModal />
+          <span className="text-zinc-700">•</span>
+          <Link href="/calendario" className="hover:text-zinc-300">
+            {t("drawer.calendar")}
+          </Link>
+          <span className="text-zinc-700">•</span>
+          <Link href="/standings" className="hover:text-zinc-300">
+            {t("drawer.standings")}
+          </Link>
           <span className="text-zinc-700">•</span>
           v2.0.0
         </span>

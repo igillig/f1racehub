@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import React from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { LayoutDashboard, Trophy, GitCompare, User, Mail, ChevronLeft } from "lucide-react";
+import { LayoutDashboard, Trophy, CalendarDays, GitCompare, User, Mail, ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/LanguageContext";
 import ContactModal from "./ContactModal";
@@ -32,6 +32,7 @@ export default function AppDrawer({ open, onClose }: AppDrawerProps) {
   }> = [
     { icon: LayoutDashboard, label: "Dashboard",             href: "/dashboard", active: true },
     { icon: Trophy,          label: t("drawer.standings"),   href: "/standings" },
+    { icon: CalendarDays,    label: t("drawer.calendar"),    href: "/calendario" },
     { icon: GitCompare,      label: t("drawer.comparisons"), soon: true },
     { icon: User,            label: t("drawer.login"),       soon: true },
   ];

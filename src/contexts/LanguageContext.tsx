@@ -214,6 +214,7 @@ const translations = {
     // Drawer nav
     "drawer.stats": "Estadísticas",
     "drawer.standings": "Campeonato",
+    "drawer.calendar": "Calendario",
     "drawer.comparisons": "Comparativas",
     "drawer.login": "Iniciar sesión",
     "drawer.soon": "Pronto",
@@ -221,6 +222,8 @@ const translations = {
 
     // Standings / Championship
     "standings.title": "Campeonato Mundial",
+    "standings.heading":
+      "Clasificación F1 {{year}}: Mundial de Pilotos y Constructores",
     "standings.drivers": "Pilotos",
     "standings.teams": "Constructores",
     "standings.updatedAfter": "Actualizado tras",
@@ -444,6 +447,7 @@ const translations = {
     // Drawer nav
     "drawer.stats": "Statistics",
     "drawer.standings": "Standings",
+    "drawer.calendar": "Calendar",
     "drawer.comparisons": "Comparisons",
     "drawer.login": "Log in",
     "drawer.soon": "Soon",
@@ -451,6 +455,8 @@ const translations = {
 
     // Standings / Championship
     "standings.title": "World Championship",
+    "standings.heading":
+      "F1 {{year}} Standings: Drivers’ and Constructors’ Championship",
     "standings.drivers": "Drivers",
     "standings.teams": "Constructors",
     "standings.updatedAfter": "Updated after",

@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 import { Instagram, Mail } from "lucide-react";
 import LanguageToggle from "@/components/LanguageToggle";
 import ContactModal from "@/components/ContactModal";
@@ -478,6 +479,27 @@ export default function F1LandingPage({ onEnterDemo, replaySession, activeViewer
       <footer className="relative z-10 shrink-0 flex flex-col items-center gap-2 sm:gap-4 py-3 sm:py-8 px-4">
         {/* Instagram + contact, right above the demo button */}
         <SocialBar contactLabel={t("footer.contact")} />
+
+        {/* Links to the indexable content pages — these are the homepage's
+            internal links, so they matter for crawl discovery as well as
+            navigation. */}
+        <nav className="flex items-center gap-3 text-[11px] uppercase tracking-[0.15em]">
+          <Link
+            href="/calendario"
+            className="text-zinc-500 transition-colors hover:text-zinc-200"
+            style={f1Font}
+          >
+            {t("drawer.calendar")}
+          </Link>
+          <span className="text-zinc-800">/</span>
+          <Link
+            href="/standings"
+            className="text-zinc-500 transition-colors hover:text-zinc-200"
+            style={f1Font}
+          >
+            {t("drawer.standings")}
+          </Link>
+        </nav>
 
         <AnimatePresence mode="wait">
           {proxyAvailable ? (
