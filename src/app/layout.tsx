@@ -55,20 +55,47 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
+// One @graph so Google can tie the app, the site and the brand together
+// instead of seeing three unrelated entities.
 const jsonLd = {
   "@context": "https://schema.org",
-  "@type": "WebApplication",
-  name: siteConfig.name,
-  url: siteUrl,
-  description: siteConfig.description,
-  applicationCategory: "SportsApplication",
-  operatingSystem: "Web",
-  inLanguage: ["es", "en"],
-  offers: {
-    "@type": "Offer",
-    price: "0",
-    priceCurrency: "USD",
-  },
+  "@graph": [
+    {
+      "@type": "WebApplication",
+      "@id": `${siteUrl}/#app`,
+      name: siteConfig.name,
+      url: siteUrl,
+      description: siteConfig.description,
+      applicationCategory: "SportsApplication",
+      operatingSystem: "Web",
+      browserRequirements: "Requires JavaScript",
+      inLanguage: ["es", "en"],
+      isAccessibleForFree: true,
+      publisher: { "@id": `${siteUrl}/#org` },
+      offers: {
+        "@type": "Offer",
+        price: "0",
+        priceCurrency: "USD",
+      },
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${siteUrl}/#website`,
+      name: siteConfig.shortName,
+      alternateName: siteConfig.name,
+      url: siteUrl,
+      inLanguage: "es",
+      publisher: { "@id": `${siteUrl}/#org` },
+    },
+    {
+      "@type": "Organization",
+      "@id": `${siteUrl}/#org`,
+      name: siteConfig.shortName,
+      url: siteUrl,
+      logo: `${siteUrl}/images/logo.png`,
+      sameAs: [siteConfig.instagram],
+    },
+  ],
 };
 
 export default function RootLayout({

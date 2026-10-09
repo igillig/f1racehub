@@ -8,6 +8,7 @@ export const siteUrl = rawUrl.replace(/\/+$/, "");
 export const siteConfig = {
   name: "F1 Race Hub",
   shortName: "F1 RaceHub",
+  instagram: "https://www.instagram.com/f1racehub.ok",
   url: siteUrl,
   locale: "es_ES",
   title: "F1 RaceHub — Telemetría y tiempos en vivo de Fórmula 1",
