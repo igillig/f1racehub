@@ -2,7 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
-import { Instagram, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
 import LanguageToggle from "@/components/LanguageToggle";
 import ContactModal from "@/components/ContactModal";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -184,18 +184,58 @@ const stagger = (i: number) => ({
   transition: { delay: 0.1 + i * 0.1, duration: 0.5, ease: "easeOut" as const },
 });
 
-/** Pill row above the CTA: Instagram + contact form, split by a vertical rule. */
+/**
+ * Instagram's glyph in the brand gradient.
+ *
+ * Inlined rather than taken from lucide because a gradient has to be painted
+ * on the SVG stroke itself — there is no way to hand a CSS gradient to an
+ * imported icon component, and a flat purple is not the brand.
+ */
+function InstagramGlyph({ size = 28 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="url(#ig-brand)"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <defs>
+        <linearGradient id="ig-brand" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0%" stopColor="#f09433" />
+          <stop offset="25%" stopColor="#e6683c" />
+          <stop offset="50%" stopColor="#dc2743" />
+          <stop offset="75%" stopColor="#cc2366" />
+          <stop offset="100%" stopColor="#bc1888" />
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+      <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+    </svg>
+  );
+}
+
+/**
+ * Pill row above the CTA: Instagram and the contact form, as icons only.
+ *
+ * No visible labels, so both carry `aria-label` and `title` — an icon-only
+ * control is otherwise unreachable for a screen reader and unguessable for
+ * anyone else.
+ */
 function SocialBar({ contactLabel }: { contactLabel: string }) {
   const itemClass =
-    "group relative flex items-center gap-2 rounded-full px-3 sm:px-4 py-1.5 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/20";
-  const labelClass =
-    "text-[9px] sm:text-[10px] uppercase tracking-[0.18em] text-zinc-500 transition-colors group-hover:text-zinc-100 whitespace-nowrap";
+    "group relative flex h-10 w-10 items-center justify-center rounded-full transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/20";
 
   // No backdrop-filter on the pill: it would become the containing block for
   // the contact modal's position:fixed overlay and knock it off-centre.
   return (
     <motion.div
-      className="flex items-center rounded-full border border-white/[0.07] bg-white/[0.03] px-1 py-1"
+      className="flex items-center gap-1 rounded-full border border-white/[0.07] bg-white/[0.03] px-1 py-1"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.75, duration: 0.5, ease: "easeOut" }}
@@ -206,44 +246,38 @@ function SocialBar({ contactLabel }: { contactLabel: string }) {
         rel="noopener noreferrer"
         className={itemClass}
         title="Instagram @f1racehub.ok"
+        aria-label="Instagram @f1racehub.ok"
       >
-        <span className="relative flex h-4 w-4 items-center justify-center">
-          {/* Brand gradient blooms behind the glyph on hover */}
-          <span
-            aria-hidden
-            className="absolute -inset-1 rounded-[7px] opacity-0 blur-[7px] transition-opacity duration-300 group-hover:opacity-80"
-            style={{ background: IG_GRADIENT }}
-          />
-          <Instagram
-            size={15}
-            strokeWidth={2}
-            className="relative text-zinc-400 transition-colors group-hover:text-white"
-          />
-        </span>
-        <span className={labelClass} style={f1Font}>
-          @f1racehub.ok
+        {/* Brand gradient blooms behind the glyph on hover */}
+        <span
+          aria-hidden
+          className="absolute inset-1 rounded-full opacity-0 blur-[7px] transition-opacity duration-300 group-hover:opacity-70"
+          style={{ background: IG_GRADIENT }}
+        />
+        <span className="relative flex items-center justify-center">
+          <InstagramGlyph />
         </span>
       </a>
 
-      <span className="h-5 w-px flex-none bg-white/[0.09]" aria-hidden />
+      <span className="h-6 w-px flex-none bg-white/[0.09]" aria-hidden />
 
       <ContactModal
         renderTrigger={(openModal) => (
-          <button onClick={openModal} className={itemClass}>
-            <span className="relative flex h-4 w-4 items-center justify-center">
-              <span
-                aria-hidden
-                className="absolute -inset-1 rounded-[7px] bg-primary opacity-0 blur-[7px] transition-opacity duration-300 group-hover:opacity-60"
-              />
-              <Mail
-                size={15}
-                strokeWidth={2}
-                className="relative text-zinc-400 transition-colors group-hover:text-white"
-              />
-            </span>
-            <span className={labelClass} style={f1Font}>
-              {contactLabel}
-            </span>
+          <button
+            onClick={openModal}
+            className={itemClass}
+            title={contactLabel}
+            aria-label={contactLabel}
+          >
+            <span
+              aria-hidden
+              className="absolute inset-1 rounded-full bg-primary opacity-0 blur-[7px] transition-opacity duration-300 group-hover:opacity-60"
+            />
+            <Mail
+              size={27}
+              strokeWidth={2}
+              className="relative text-zinc-400 transition-colors group-hover:text-white"
+            />
           </button>
         )}
       />
