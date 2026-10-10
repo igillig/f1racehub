@@ -28,7 +28,10 @@ import {
 let SESSION_KEY = 0;
 const ENV_SESSION_KEY = parseInt(process.env.REPLAY_SESSION_KEY || "0");
 let CIRCUIT_KEY = null; // Loaded from API at startup
-let TOTAL_LAPS = 70; // Default; updated from lap data as race progresses
+// Race distance of the session being replayed. Zero means "unknown": the
+// frontend hides the lap counter rather than show a made-up denominator.
+// Resolved per session in fetchSessionInfo().
+let TOTAL_LAPS = 0;
 
 // Replay speed multiplier (1x = real-time, 10x = 10 seconds per real second)
 const REPLAY_SPEED = 1;
@@ -167,6 +170,13 @@ async function fetchSessionInfo() {
     );
   }
 
+  TOTAL_LAPS = await resolveTotalLaps(session);
+  console.log(
+    TOTAL_LAPS
+      ? `[Replay] Race distance: ${TOTAL_LAPS} laps`
+      : `[Replay] No race distance for a ${session.session_type} session — lap counter hidden`,
+  );
+
   return {
     session: {
       session_key: SESSION_KEY,
@@ -184,6 +194,23 @@ async function fetchSessionInfo() {
     },
     drivers,
   };
+}
+
+async function resolveTotalLaps(session) {
+  if (session.session_type !== "Race") return 0;
+
+  if (dbMode) {
+    const laps = store.getTopicRows(SESSION_KEY, "laps");
+    return laps.reduce((max, lap) => Math.max(max, lap.lap_number || 0), 0);
+  }
+
+  // REST fallback: the classification already holds the winner's lap count,
+  // which is one request instead of the session's whole lap set.
+  await sleep(REQUEST_DELAY_MS);
+  const result = await fetchJSON(
+    `${API_BASE}/session_result?session_key=${SESSION_KEY}`,
+  );
+  return result.reduce((max, r) => Math.max(max, r.number_of_laps || 0), 0);
 }
 
 async function fetchStartingGrid() {
@@ -837,6 +864,7 @@ export function stopReplay() {
   replayStarted = false;
   dbMode = false;
   replayEndMs = 0;
+  TOTAL_LAPS = 0;
   sessionData = null;
   driversData = [];
   startingGridData = {};
