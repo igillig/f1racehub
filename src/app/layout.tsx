@@ -35,9 +35,21 @@ export const metadata: Metadata = {
       "max-video-preview": -1,
     },
   },
+  // logo.png is the white-on-transparent mark used inside the app, which on a
+  // white background renders as a lone red "F1" floating on nothing — that is
+  // what Google was showing beside the result. These come from logo_bg.png,
+  // which carries its own dark background, so the stopwatch and the flag
+  // survive at 16px. Stable paths rather than the app/icon file convention:
+  // Google caches favicons and recrawls them rarely, so the URL should not
+  // change with every build.
   icons: {
-    icon: "/images/logo.png",
-    apple: "/images/logo.png",
+    icon: [
+      { url: "/icons/icon-48.png", sizes: "48x48", type: "image/png" },
+      { url: "/icons/icon-96.png", sizes: "96x96", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: { url: "/icons/apple-touch-icon.png", sizes: "180x180" },
   },
   manifest: "/manifest.webmanifest",
 };
