@@ -9,11 +9,13 @@ import {
   fetchMeeting,
   fetchSeason,
   formatInTrackTime,
+  isGrandPrix,
   sessionLabel,
   type MeetingDetail,
 } from "@/lib/calendar";
 import { COUNTRY_CODES } from "@/lib/constants";
 import { siteUrl } from "@/lib/site";
+import { socialMeta } from "@/lib/social";
 
 export const revalidate = CALENDAR_REVALIDATE;
 
@@ -49,7 +51,7 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
       `F1 ${meeting.circuitShortName}`,
     ],
     alternates: { canonical: `/gp/${meeting.slug}` },
-    openGraph: { url: `/gp/${meeting.slug}`, title, description },
+    ...socialMeta({ url: `/gp/${meeting.slug}`, title, description }),
   };
 }
 
@@ -97,7 +99,7 @@ export default async function GrandPrixPage({ params }: Params) {
 
   const iso = COUNTRY_CODES[meeting.countryName];
   const now = Date.now();
-  const race = meeting.sessions.find((s) => s.type === "Race");
+  const race = meeting.sessions.find(isGrandPrix);
   const isOver = new Date(meeting.dateEnd).getTime() < now;
 
   return (
@@ -151,7 +153,7 @@ export default async function GrandPrixPage({ params }: Params) {
           ) : (
             <ul className="space-y-2">
               {meeting.sessions.map((s) => {
-                const isRace = s.type === "Race";
+                const isRace = isGrandPrix(s);
                 return (
                   <li
                     key={s.sessionKey}

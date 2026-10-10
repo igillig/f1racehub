@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { LanguageProvider } from "@/contexts/LanguageContext";
+import { socialMeta } from "@/lib/social";
 import { siteConfig, siteUrl } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -18,19 +19,11 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "/",
   },
-  openGraph: {
-    type: "website",
-    locale: siteConfig.locale,
+  ...socialMeta({
     url: siteUrl,
-    siteName: siteConfig.name,
     title: siteConfig.title,
     description: siteConfig.description,
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: siteConfig.title,
-    description: siteConfig.description,
-  },
+  }),
   robots: {
     index: true,
     follow: true,

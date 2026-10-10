@@ -460,7 +460,38 @@ async function startFallbackNoLive() {
 }
 
 // Create HTTP server
-const server = http.createServer(async (req, res) => {
+/**
+ * Archive section of /health.
+ *
+ * Reading the archive opens the SQLite file, which can fail for reasons that
+ * have nothing to do with the proxy's ability to stream (corrupt DB, locked
+ * file, bad permissions, a native module built for another Node ABI). Health
+ * reports that as a degraded archive instead of failing the whole response —
+ * this used to take the process down, because the browser polls /health every
+ * 15 s and the throw landed in an async handler with nothing to catch it.
+ */
+function archiveHealth() {
+  const base = {
+    downloading: isArchiveDownloading(),
+    replayFromDB: isReplayUsingDB(),
+  };
+  try {
+    return {
+      ...base,
+      sessions: listSessions().map((s) => ({
+        key: s.session_key,
+        name: `${s.payload.session_name} ${s.payload.location}`,
+        date: s.date_start?.slice(0, 10),
+        complete: s.complete === 1,
+      })),
+    };
+  } catch (err) {
+    console.error("[proxy] Archive unreadable for /health:", err.message);
+    return { ...base, sessions: [], error: err.message };
+  }
+}
+
+const handleRequest = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -504,16 +535,7 @@ const server = http.createServer(async (req, res) => {
       // SSE delivery health — `skipped` climbing means clients cannot keep up
       // with the stream, `maxPendingKB` is the worst socket's current backlog.
       delivery: { ...delivery, maxPendingKB: maxPendingKB() },
-      archive: {
-        downloading: isArchiveDownloading(),
-        replayFromDB: isReplayUsingDB(),
-        sessions: listSessions().map((s) => ({
-          key: s.session_key,
-          name: `${s.payload.session_name} ${s.payload.location}`,
-          date: s.date_start?.slice(0, 10),
-          complete: s.complete === 1,
-        })),
-      },
+      archive: archiveHealth(),
     };
     if (mode === "replay" && currentState.session) {
       health.replaySession = {
@@ -737,6 +759,30 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "Not found" }));
+};
+
+// `handleRequest` is async, and a raw http server does nothing with the
+// promise it returns — an unhandled rejection in any route would terminate the
+// whole proxy and drop every SSE client. Catching here keeps one bad request
+// from taking the stream down with it.
+const server = http.createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    console.error(`[proxy] Unhandled error on ${req.method} ${req.url}:`, err);
+    if (res.headersSent) {
+      // Too late to change the status; just stop the dangling response.
+      res.end();
+      return;
+    }
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "internal_error" }));
+  });
+});
+
+// Last line of defence. A stray rejection somewhere in the MQTT/SignalR/replay
+// plumbing is not a reason to disconnect every viewer, and the container's
+// restart policy would only paper over it — so log loudly and keep serving.
+process.on("unhandledRejection", (reason) => {
+  console.error("[proxy] Unhandled rejection:", reason);
 });
 
 // Graceful shutdown

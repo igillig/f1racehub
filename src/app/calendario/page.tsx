@@ -11,6 +11,7 @@ import {
 } from "@/lib/calendar";
 import { COUNTRY_CODES } from "@/lib/constants";
 import { siteUrl } from "@/lib/site";
+import { socialMeta } from "@/lib/social";
 
 export const revalidate = CALENDAR_REVALIDATE;
 
@@ -34,7 +35,7 @@ export async function generateMetadata(): Promise<Metadata> {
       "circuitos F1",
     ],
     alternates: { canonical: "/calendario" },
-    openGraph: { url: "/calendario", title, description },
+    ...socialMeta({ url: "/calendario", title, description }),
   };
 }
 

@@ -6,6 +6,7 @@ import {
   type ChampionshipSnapshot,
 } from "@/lib/championship";
 import { siteUrl } from "@/lib/site";
+import { socialMeta } from "@/lib/social";
 
 // Standings only change once a race is scored, so an hour of staleness is
 // fine — and it means crawlers always get a fully populated table.
@@ -37,11 +38,7 @@ export async function generateMetadata(): Promise<Metadata> {
     alternates: {
       canonical: "/standings",
     },
-    openGraph: {
-      url: "/standings",
-      title,
-      description,
-    },
+    ...socialMeta({ url: "/standings", title, description }),
   };
 }
 

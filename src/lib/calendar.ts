@@ -64,6 +64,9 @@ const OPENF1 = "https://api.openf1.org/v1";
 /** Calendars shift rarely; six hours of staleness is plenty. */
 export const CALENDAR_REVALIDATE = 21600;
 
+/** Cache tag for every calendar fetch, so POST /api/revalidate can drop them. */
+export const CALENDAR_TAG = "calendar";
+
 /** Strips diacritics and punctuation so "Montréal" → "montreal". */
 export function slugify(input: string): string {
   return input
@@ -122,6 +125,17 @@ const SESSION_LABELS: Record<string, { es: string; en: string }> = {
   "Sprint Shootout": { es: "Sprint Shootout", en: "Sprint Shootout" },
 };
 
+/**
+ * The Grand Prix itself, as opposed to the Sprint.
+ *
+ * OpenF1 labels both with `session_type: "Race"`, so matching on the type picks
+ * whichever comes first — the Sprint, on a sprint weekend. Only `session_name`
+ * tells them apart.
+ */
+export function isGrandPrix(session: SessionSlot): boolean {
+  return session.name === "Race";
+}
+
 export function sessionLabel(name: string, locale: Locale): string {
   return SESSION_LABELS[name]?.[locale] ?? name;
 }
@@ -137,41 +151,93 @@ export function meetingSlug(location: string, year: number): string {
   return `${slugify(location)}-${year}`;
 }
 
-const cacheOpts = { next: { revalidate: CALENDAR_REVALIDATE } } as RequestInit;
+const cacheOpts = {
+  next: { revalidate: CALENDAR_REVALIDATE, tags: [CALENDAR_TAG] },
+} as RequestInit;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// The proxy forwards these with the paid-tier token (OPENF1_PASSTHROUGH in
+// proxy/server.js). Only reachable server-side, which is where every calendar
+// fetch happens.
+const PROXY_PASSTHROUGH = ["meetings", "sessions"];
+
+const proxyBase = () =>
+  `${process.env.INTERNAL_PROXY_URL || "http://f1-prod-api:4000"}/api`;
+
 /**
- * One OpenF1 read, with backoff on rate limiting.
+ * Set when OpenF1 locks REST to authenticated callers, which it does for the
+ * whole duration of every live session — the entire race weekend, in practice.
+ * Without the pin a full season render pays that failure ~30 times over; with
+ * it, only the first request does. It expires so a long-lived server goes back
+ * to the direct route once the session is over.
+ */
+let proxyPinnedUntil = 0;
+const PROXY_PIN_MS = 10 * 60 * 1000;
+
+/** The same read through the proxy, which has the credentials. */
+async function viaProxy<T>(path: string): Promise<T | null> {
+  if (!PROXY_PASSTHROUGH.includes(path.split("?")[0])) return null;
+
+  try {
+    const r = await fetch(`${proxyBase()}/${path}`, cacheOpts);
+    if (r.status === 404) return [] as unknown as T;
+    if (!r.ok) return null;
+    return (await r.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One OpenF1 read, with backoff on rate limiting and a fallback through the
+ * proxy.
  *
  * Returns `[]` for a genuine "no results" (OpenF1 answers 404 for an empty
  * query) and `null` when the request actually failed. The distinction matters:
  * a build that prerenders the whole season fires one request per round and
  * trips the free tier's 30/min limit, and treating that 429 as "no sessions"
  * would bake empty schedules into the HTML and cache them for hours.
+ *
+ * The fallback is what keeps a deploy during a race weekend from shipping an
+ * empty calendar: OpenF1 answers 401 for *every* endpoint, past seasons
+ * included, while a session is live, and only the proxy holds the token.
  */
 async function openf1<T>(path: string, attempts = 4): Promise<T | null> {
+  if (Date.now() < proxyPinnedUntil) {
+    const pinned = await viaProxy<T>(path);
+    if (pinned !== null) return pinned;
+  }
+
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const r = await fetch(`${OPENF1}/${path}`, cacheOpts);
       if (r.status === 404) return [] as unknown as T;
       if (r.ok) return (await r.json()) as T;
-      // 429 (burst limit) and 503 (REST locked to paid accounts during a live
-      // session) are both worth waiting out; jitter keeps parallel page
-      // renders from retrying in lockstep.
-      if (r.status === 429 || r.status === 503 || r.status >= 500) {
+
+      // 401/403: REST is locked to authenticated callers for the duration of a
+      // live session. Retrying is pointless — the lock outlasts any backoff —
+      // so go straight to the proxy and remember to start there.
+      if (r.status === 401 || r.status === 403) {
+        proxyPinnedUntil = Date.now() + PROXY_PIN_MS;
+        return viaProxy<T>(path);
+      }
+
+      // 429 (burst limit) and 5xx are worth waiting out; jitter keeps parallel
+      // page renders from retrying in lockstep.
+      if (r.status === 429 || r.status >= 500) {
         if (attempt < attempts - 1) {
           await sleep(900 * (attempt + 1) + Math.random() * 400);
           continue;
         }
       }
-      return null;
+      return viaProxy<T>(path);
     } catch {
       if (attempt < attempts - 1) {
         await sleep(900 * (attempt + 1) + Math.random() * 400);
         continue;
       }
-      return null;
+      return viaProxy<T>(path);
     }
   }
   return null;
@@ -206,7 +272,14 @@ export async function fetchSeason(
   locale: Locale = "es",
 ): Promise<Meeting[]> {
   const raw = await openf1<RawMeeting[]>(`meetings?year=${year}`);
-  if (!raw) return [];
+  // Throw on a failed request, the same way fetchSeasonSessions does, instead
+  // of reporting it as a season with no rounds. Returning [] here let one
+  // transient failure during a build bake a 404 into that round's GP page and
+  // cache it for the whole revalidate window — `openf1` already answers [] for
+  // a genuinely empty result, so an empty array still means empty.
+  if (raw === null) {
+    throw new Error(`OpenF1 meetings unavailable for season ${year}`);
+  }
 
   const bySlug = new Map<string, Meeting>();
   for (const m of raw) {

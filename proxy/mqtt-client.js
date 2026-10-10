@@ -768,6 +768,15 @@ function maybeRefreshSession(sessionKey) {
  * Fetch historical data for the current session.
  * Called once at startup to fill in data that happened before we connected.
  */
+
+function sessionMovedOn(sessionKey) {
+  if (trackedSessionKey === null || trackedSessionKey === sessionKey) return false;
+  console.log(
+    `[openf1-mqtt] Discarding historical data for ${sessionKey} — now tracking ${trackedSessionKey}`,
+  );
+  return true;
+}
+
 async function fetchHistoricalData(sessionKey) {
   if (!sessionKey) return;
 
@@ -801,6 +810,8 @@ async function fetchHistoricalData(sessionKey) {
       fetchWithRetry(`${API_BASE}/pit?session_key=${sessionKey}`, { headers }),
       fetchWithRetry(`${API_BASE}/position?session_key=${sessionKey}`, { headers }),
     ]);
+
+    if (sessionMovedOn(sessionKey)) return;
 
     if (raceControlRes.ok) {
       const raceControl = await raceControlRes.json();
@@ -898,6 +909,8 @@ async function fetchHistoricalData(sessionKey) {
         `[openf1-mqtt] Failed to load drivers (status ${driversRes.status}) — team colors may be missing`,
       );
     }
+
+    if (sessionMovedOn(sessionKey)) return;
 
     // Sort ascending so best/last lap are accumulated correctly
     if (lapsRes.ok) {

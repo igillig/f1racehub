@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { socialMeta } from "@/lib/social";
 
 export const metadata: Metadata = {
   title: "Timing en vivo F1 — vueltas, sectores y mapa de pista",
@@ -7,12 +8,12 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "/dashboard",
   },
-  openGraph: {
+  ...socialMeta({
     url: "/dashboard",
     title: "Timing en vivo F1 — vueltas, sectores y mapa de pista",
     description:
       "Timing en vivo de Fórmula 1: vueltas, mini-sectores, intervalos, neumáticos y mapa de pista en tiempo real.",
-  },
+  }),
 };
 
 export default function DashboardLayout({

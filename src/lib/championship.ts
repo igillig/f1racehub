@@ -69,6 +69,9 @@ const OPENF1 = "https://api.openf1.org/v1";
 /** How long a server-rendered standings table stays fresh (seconds). */
 export const STANDINGS_REVALIDATE = 3600;
 
+/** Cache tag for every standings fetch, so POST /api/revalidate can drop them. */
+export const STANDINGS_TAG = "standings";
+
 const isServer = typeof window === "undefined";
 
 // In the browser the proxy is reached through the Next rewrite; on the server
@@ -82,7 +85,9 @@ const proxyBase = () =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Next's fetch extension; ignored by the browser's fetch.
-const cacheOpts = { next: { revalidate: STANDINGS_REVALIDATE } } as RequestInit;
+const cacheOpts = {
+  next: { revalidate: STANDINGS_REVALIDATE, tags: [STANDINGS_TAG] },
+} as RequestInit;
 
 /**
  * Builds a fetcher for one standings load.
