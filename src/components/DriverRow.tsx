@@ -5,6 +5,12 @@ import { TEAM_COLORS, TIRE_COMPOUNDS, TEAM_LOGOS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Pin } from "lucide-react";
+import {
+  DENSITY,
+  gridColumns,
+  maxBarWidth,
+  type Density,
+} from "@/lib/timingDensity";
 
 interface DriverRowProps {
   driver: Driver;
@@ -15,6 +21,8 @@ interface DriverRowProps {
   isPinned?: boolean;
   onPin?: (driverNumber: string | null) => void;
   gapPrimary?: "gap" | "interval";
+  /** How much the table has given up to the map. See @/lib/timingDensity. */
+  density?: Density;
 }
 
 // Empty time format placeholder
@@ -25,10 +33,14 @@ const EMPTY_SECTOR = "--.---";
 function MiniSectors({
   sectors,
   count = 6,
+  bar,
+  maxBar,
   t,
 }: {
   sectors?: SectorStatus[];
   count?: number;
+  bar: number;
+  maxBar: number;
   t: (key: string, params?: Record<string, string | number>) => string;
 }) {
   // Use actual sectors length if available, otherwise use count
@@ -48,8 +60,11 @@ function MiniSectors({
       {items.map((status, i) => (
         <div
           key={i}
+          // Grows into the surplus when the table is wider than this density
+          // level needs, instead of leaving the column half empty.
+          style={{ flex: `1 1 ${bar}px`, minWidth: bar, maxWidth: maxBar }}
           className={cn(
-            "w-[16px] h-[5px] rounded-[2px] cursor-default",
+            "h-[5px] rounded-[2px] cursor-default",
             status === "purple" && "bg-[oklch(.541_.281_293.009)]",
             status === "green" && "bg-[oklch(.696_.17_162.48)]",
             status === "yellow" && "bg-[oklch(.795_.184_86.047)]",
@@ -93,7 +108,7 @@ function TireCompound({
     soft: "/images/tires/soft.svg",
     medium: "/images/tires/medium.svg",
     hard: "/images/tires/hard.svg",
-    intermediate: "/images/tires/wet.svg", // Use wet for intermediate if no specific file
+    intermediate: "/images/tires/intermediate.svg",
     wet: "/images/tires/wet.svg",
   };
 
@@ -153,12 +168,16 @@ function SectorCell({
   status,
   isBestOverall,
   isActive,
+  bar,
+  maxBar,
   t,
 }: {
   miniSectors?: SectorStatus[];
   time?: string;
   bestTime?: string;
   status: SectorStatus;
+  bar: number;
+  maxBar: number;
   isBestOverall?: boolean;
   isActive?: boolean; // true if this sector is current or just completed
   t: (key: string, params?: Record<string, string | number>) => string;
@@ -188,7 +207,13 @@ function SectorCell({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <MiniSectors sectors={miniSectors} count={sectorCount} t={t} />
+      <MiniSectors
+        sectors={miniSectors}
+        count={sectorCount}
+        bar={bar}
+        maxBar={maxBar}
+        t={t}
+      />
       <div className="flex items-center justify-center gap-2">
         <span
           className={cn(
@@ -224,8 +249,14 @@ export default function DriverRow({
   isPinned,
   onPin,
   gapPrimary = "gap",
+  density = 0,
 }: DriverRowProps) {
   const { t } = useLanguage();
+
+  const level = DENSITY[density];
+  // The driver column is the second thing to give: the position number and the
+  // code badge both tighten rather than either one disappearing.
+  const compact = level.driver < DENSITY[0].driver;
 
   // Use teamColor from API first, then fallback to hardcoded TEAM_COLORS
   const teamColor = driver.teamColor || TEAM_COLORS[driver.team] || "#888";
@@ -292,7 +323,11 @@ export default function DriverRow({
         !eliminated && inEliminationZone && "bg-red-950/60",
       )}
       style={{
-        gridTemplateColumns: `95px 47px 99px 72px 90px minmax(${s1Count * 20}px, max-content) minmax(${s2Count * 20}px, max-content) minmax(${s3Count * 20}px, max-content)`,
+        gridTemplateColumns: gridColumns(density, {
+          s1: s1Count,
+          s2: s2Count,
+          s3: s3Count,
+        }),
         borderLeft: isPinned
           ? `3px solid ${teamColor}`
           : !eliminated && inEliminationZone
@@ -310,11 +345,19 @@ export default function DriverRow({
           onPin?.(isPinned ? null : driver.driverNumber);
         }}
       >
-        <span className="text-xl mr-2 font-black font-mono tabular-nums leading-none w-9 text-center text-white">
+        <span
+          className={cn(
+            "font-black font-mono tabular-nums leading-none text-center text-white",
+            compact ? "text-lg mr-1 w-7" : "text-xl mr-2 w-9",
+          )}
+        >
           {driver.retired ? "RET" : driver.position}
         </span>
         <div
-          className="flex items-center justify-center h-[30px] px-2 rounded-sm text-lg font-black font-mono my-[4px]"
+          className={cn(
+            "flex items-center justify-center h-[30px] rounded-sm font-black font-mono my-[4px]",
+            compact ? "px-1 text-base" : "px-2 text-lg",
+          )}
           style={{ backgroundColor: "white", color: teamColor }}
         >
           {driver.code}
@@ -349,20 +392,25 @@ export default function DriverRow({
       </div>
       */}
 
-      {/* PIT indicator */}
-      <PitIndicator
-        inPit={driver.inPit}
-        isPitOutLap={driver.isPitOutLap}
-        t={t}
-      />
+      {/* PIT indicator — the first column dropped when the table runs out of
+          room. The pit count stays visible in the tire cell until that goes. */}
+      {level.pit && (
+        <PitIndicator
+          inPit={driver.inPit}
+          isPitOutLap={driver.isPitOutLap}
+          t={t}
+        />
+      )}
 
       {/* Tire with L and PIT */}
-      <TireCompound
-        compound={driver.tire.compound}
-        laps={driver.tire.age}
-        pitCount={driver.pitCount}
-        t={t}
-      />
+      {level.tire && (
+        <TireCompound
+          compound={driver.tire.compound}
+          laps={driver.tire.age}
+          pitCount={driver.pitCount}
+          t={t}
+        />
+      )}
 
       {/* Gap */}
       {driver.retired ? <div /> : (
@@ -438,6 +486,8 @@ export default function DriverRow({
         status={driver.sector1Status}
         isBestOverall={driver.hasSector1Record}
         isActive={isSectorActive(1)}
+        bar={level.bar}
+        maxBar={maxBarWidth(density)}
         t={t}
       />
 
@@ -452,6 +502,8 @@ export default function DriverRow({
         status={driver.sector2Status}
         isBestOverall={driver.hasSector2Record}
         isActive={isSectorActive(2)}
+        bar={level.bar}
+        maxBar={maxBarWidth(density)}
         t={t}
       />
 
@@ -465,6 +517,8 @@ export default function DriverRow({
         status={driver.sector3Status}
         isBestOverall={driver.hasSector3Record}
         isActive={isSectorActive(3)}
+        bar={level.bar}
+        maxBar={maxBarWidth(density)}
         t={t}
       />
     </div>

@@ -202,6 +202,7 @@ const translations = {
 
     // Dashboard tabs
     "tab.map": "Mapa",
+    "split.resize": "Arrastrá para repartir el espacio entre la tabla y el mapa. Doble clic para volver al reparto por defecto.",
     "tab.control": "Control",
     "tab.limits": "Límites",
     "tab.radio": "Radio",
@@ -435,6 +436,7 @@ const translations = {
 
     // Dashboard tabs
     "tab.map": "Map",
+    "split.resize": "Drag to split the space between the table and the map. Double-click to restore the default split.",
     "tab.control": "Control",
     "tab.limits": "Limits",
     "tab.radio": "Radio",

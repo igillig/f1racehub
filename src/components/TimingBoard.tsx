@@ -8,7 +8,15 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpDown } from "lucide-react";
 
+import {
+  DENSITY,
+  gridColumns,
+  type Density,
+} from "@/lib/timingDensity";
+
 interface TimingBoardProps {
+  /** How much the table has given up to the map. See @/lib/timingDensity. */
+  density?: Density;
   drivers: Driver[];
   sessionName?: string;
   qualifyingPart?: number;
@@ -30,6 +38,7 @@ export default function TimingBoard({
   onDriverHover,
   pinnedDriverNumber,
   onDriverPin,
+  density = 0,
 }: TimingBoardProps) {
   const { t } = useLanguage();
 
@@ -170,20 +179,39 @@ export default function TimingBoard({
 
   const stickyStyle = getStickyStyle();
 
-  const gridCols = `95px 47px 99px 72px 90px minmax(${s1Count * 20}px, max-content) minmax(${s2Count * 20}px, max-content) minmax(${s3Count * 20}px, max-content)`;
+  const level = DENSITY[density];
+  const gridCols = gridColumns(density, {
+    s1: s1Count,
+    s2: s2Count,
+    s3: s3Count,
+  });
 
   return (
     <>
       <div ref={cardRef} className="h-full flex flex-col">
         <Card className="overflow-hidden flex-1 flex flex-col">
-          {/* Header */}
+          {/* Header.
+              `overflow-y-hidden` makes this a scroll container so that
+              `scrollbar-gutter` applies to it too: the header and the list below
+              then reserve the same gutter and resolve the same `1fr` sector
+              columns to the same widths. Without it the list's scrollbar makes
+              the rows a few px narrower than the header and the S1/S2/S3 labels
+              drift off their minisectors. */}
           <div
-            className="grid gap-3 px-3 py-2 bg-muted/30 text-xs text-muted-foreground uppercase tracking-wider font-medium border-b border-border"
-            style={{ gridTemplateColumns: gridCols }}
+            className="grid gap-3 px-3 py-2 bg-muted/30 text-xs text-muted-foreground uppercase tracking-wider font-medium border-b border-border overflow-y-hidden [scrollbar-gutter:stable]"
+            style={{
+              gridTemplateColumns: gridCols,
+              // Mirrors the 3px accent border every row carries, so both boxes
+              // are the same width and the `1fr` sector columns land on the
+              // same pixels.
+              borderLeft: "3px solid transparent",
+            }}
           >
             <div>{t("timing.driver")}</div>
-            <div className="text-center">{t("timing.pit")}</div>
-            <div>{t("timing.tire")}</div>
+            {level.pit && (
+              <div className="text-center">{t("timing.pit")}</div>
+            )}
+            {level.tire && <div>{t("timing.tire")}</div>}
             <button
               className="text-right flex items-center justify-end gap-1 w-full cursor-pointer hover:text-foreground transition-colors"
               title={t(gapPrimary === "gap" ? "timing.gapToggleTooltip" : "timing.intervalToggleTooltip")}
@@ -198,7 +226,10 @@ export default function TimingBoard({
             <div className="text-center">{t("timing.s3")}</div>
           </div>
 
-          <div ref={listRef} className="relative flex-1 overflow-y-auto">
+          <div
+            ref={listRef}
+            className="relative flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+          >
             {drivers.length > 0 ? (
               <AnimatePresence mode="popLayout">
                 {drivers.map((driver) => {
@@ -224,6 +255,7 @@ export default function TimingBoard({
                         isPinned={isPinned}
                         onPin={onDriverPin}
                         gapPrimary={gapPrimary}
+                        density={density}
                       />
                     </motion.div>
                   );
@@ -263,6 +295,7 @@ export default function TimingBoard({
             isHovered={false}
             onHover={() => {}}
             gapPrimary={gapPrimary}
+            density={density}
           />
         </div>
       )}

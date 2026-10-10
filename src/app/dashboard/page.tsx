@@ -19,6 +19,8 @@ import ReplayBar from "@/components/ReplayBar";
 import AppDrawer from "@/components/AppDrawer";
 import { useF1DataSSE } from "@/hooks/useF1DataSSE";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useTimingSplit } from "@/hooks/useTimingSplit";
+import { sectorCounts } from "@/lib/timingDensity";
 
 export default function DashboardPage() {
   const { t } = useLanguage();
@@ -40,6 +42,10 @@ export default function DashboardPage() {
     "map" | "control" | "violations" | "radio"
   >("map");
   const [tableExpanded, setTableExpanded] = useState(false);
+
+  // Desktop split between the timing table and the map. The circuit's
+  // minisector count sets the table's floor, so the counts come from the data.
+  const split = useTimingSplit(sectorCounts(drivers[0]));
   const [hoveredDriverNumber, setHoveredDriverNumber] = useState<string | null>(
     null,
   );
@@ -242,7 +248,12 @@ export default function DashboardPage() {
         >
           <StatusBanner banner={activeBanner} />
 
-          <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-2 p-2">
+          <div
+            ref={split.containerRef}
+            className={`flex-1 min-h-0 flex flex-col lg:flex-row gap-2 p-2 ${
+              split.dragging ? "select-none" : ""
+            }`}
+          >
           {/* Mobile timing board */}
           <div className={`lg:hidden min-h-0 ${tableExpanded ? "flex-1" : "flex-[60]"}`}>
             <MobileTimingBoard
@@ -258,8 +269,13 @@ export default function DashboardPage() {
             />
           </div>
 
-          {/* Desktop timing board */}
-          <div className="hidden lg:block lg:flex-none min-h-0 overflow-x-auto">
+          {/* Desktop timing board — explicit width so the divider can trade it
+              against the map. Until the container is measured there is no width
+              and the table falls back to its intrinsic size. */}
+          <div
+            className="hidden lg:block lg:flex-none min-h-0 overflow-x-auto"
+            style={{ width: split.width ?? undefined }}
+          >
             <TimingBoard
               drivers={drivers}
               sessionName={sessionInfo.sessionName}
@@ -268,6 +284,26 @@ export default function DashboardPage() {
               onDriverHover={setHoveredDriverNumber}
               pinnedDriverNumber={pinnedDriverNumber}
               onDriverPin={setPinnedDriverNumber}
+              density={split.density}
+            />
+          </div>
+
+          {/* Divider. Double-click restores the full table. */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("split.resize")}
+            title={t("split.resize")}
+            onPointerDown={split.onPointerDown}
+            onDoubleClick={split.reset}
+            className={`hidden lg:flex w-2 shrink-0 cursor-col-resize items-center justify-center rounded-full transition-colors ${
+              split.dragging ? "bg-primary/40" : "hover:bg-zinc-700/60"
+            }`}
+          >
+            <div
+              className={`h-10 w-[3px] rounded-full transition-colors ${
+                split.dragging ? "bg-primary" : "bg-zinc-700"
+              }`}
             />
           </div>
 

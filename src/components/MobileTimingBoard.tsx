@@ -40,7 +40,7 @@ const TIRE_IMAGES: Record<string, string> = {
   soft:         "/images/tires/soft.svg",
   medium:       "/images/tires/medium.svg",
   hard:         "/images/tires/hard.svg",
-  intermediate: "/images/tires/wet.svg",
+  intermediate: "/images/tires/intermediate.svg",
   wet:          "/images/tires/wet.svg",
 };
 
