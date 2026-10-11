@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Driver, SectorStatus } from "@/types/f1";
 import { TEAM_COLORS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { Pin, Expand, Shrink } from "lucide-react";
+import { useGapPrimary, type GapPrimary } from "@/hooks/useGapPrimary";
+import { Pin, Expand, Shrink, ArrowUpDown } from "lucide-react";
 
 interface Props {
   drivers: Driver[];
@@ -35,6 +36,9 @@ const SECTOR_TEXT: Record<SectorStatus, string> = {
   blue:   "text-[#2b7fff]",
   none:   "text-zinc-400",
 };
+
+/** Session label row plus the column header row, both sticky at the card top. */
+const HEADER_BLOCK_H = 52;
 
 const TIRE_IMAGES: Record<string, string> = {
   soft:         "/images/tires/soft.svg",
@@ -77,6 +81,8 @@ function DriverRowMobile({
   eliminationCutoff,
   isExpanded,
   isPinned,
+  gapPrimary,
+  docked = false,
   onToggle,
   onPin,
 }: {
@@ -84,6 +90,9 @@ function DriverRowMobile({
   eliminationCutoff: number | null;
   isExpanded: boolean;
   isPinned: boolean;
+  gapPrimary: GapPrimary;
+  /** True for the copy docked to an edge, so it does not claim to be the row. */
+  docked?: boolean;
   onToggle: () => void;
   onPin: () => void;
 }) {
@@ -99,7 +108,15 @@ function DriverRowMobile({
     : driver.lastLapPersonalBest ? SECTOR_TEXT.green
     : "text-zinc-400";
 
-  const gapText = driver.position === 1 ? "–" : (driver.gap || driver.interval || "–");
+  // Interval = gap to the car ahead, gap = gap to P1. Same as desktop.
+  const gapText =
+    gapPrimary === "interval"
+      ? driver.interval || "–"
+      : driver.position === 1
+        ? "–"
+        : driver.gap || "–";
+  const inPit = driver.inPit;
+  const pitOut = !inPit && driver.isPitOutLap;
 
   const s1c = driver.sector1SegmentCount || 6;
   const s2c = driver.sector2SegmentCount || 6;
@@ -117,6 +134,7 @@ function DriverRowMobile({
         eliminated && "opacity-40",
         isPinned && "border-l-2",
       )}
+      data-pinned-row={isPinned && !docked ? "true" : undefined}
       style={isPinned ? { borderLeftColor: teamColor } : undefined}
     >
       {/* Collapsed row */}
@@ -148,20 +166,31 @@ function DriverRowMobile({
           <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{driver.tire.age}</span>
         </div>
 
+        {/* Pit status */}
+        <span className="w-9 flex-shrink-0 flex justify-center">
+          <span
+            className={cn(
+              "text-[9px] font-bold leading-none px-1 py-0.5 rounded border",
+              inPit
+                ? "text-cyan-400 border-cyan-500"
+                : pitOut
+                  ? "text-yellow-400 border-yellow-400"
+                  : "text-zinc-800 border-zinc-800",
+            )}
+            title={inPit ? t("driver.inPit") : pitOut ? t("driver.pitOut") : undefined}
+          >
+            {pitOut ? "OUT" : "PIT"}
+          </span>
+        </span>
+
         {/* Gap */}
         <span className="flex-1 text-xs text-zinc-300 font-mono tabular-nums text-right pr-2 truncate">
           {gapText}
         </span>
 
-        {/* Last lap / PIT / OUT */}
+        {/* Last lap */}
         <span className={cn("w-[68px] flex-shrink-0 text-right text-xs font-mono tabular-nums", lastLapColor)}>
-          {driver.inPit ? (
-            <span className="text-[10px] font-bold text-cyan-400 border border-cyan-500 px-1 py-0.5 rounded">PIT</span>
-          ) : driver.isPitOutLap ? (
-            <span className="text-[10px] font-bold text-yellow-400 border border-yellow-400 px-1 py-0.5 rounded">OUT</span>
-          ) : (
-            driver.lastLap || "–:–-.–––"
-          )}
+          {driver.lastLap || "–:–-.–––"}
         </span>
 
         {/* Chevron */}
@@ -262,7 +291,16 @@ export default function MobileTimingBoard({
   onToggleExpand,
 }: Props) {
   const { t } = useLanguage();
+  const { gapPrimary, toggle: toggleGapPrimary } = useGapPrimary(sessionName);
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [pinnedPos, setPinnedPos] = useState<"visible" | "above" | "below">("visible");
+  const [cardBounds, setCardBounds] = useState<{
+    top: number;
+    bottom: number;
+    left: number;
+    width: number;
+  } | null>(null);
 
   const eliminationCutoff = (() => {
     if (!qualifyingPart || qualifyingPart === 3) return null;
@@ -282,16 +320,88 @@ export default function MobileTimingBoard({
     onDriverPin?.(pinnedDriverNumber === num ? null : num);
   };
 
-  // Pinned driver floats to top
-  const sortedDrivers = pinnedDriverNumber
-    ? [
-        ...drivers.filter((d) => d.driverNumber === pinnedDriverNumber),
-        ...drivers.filter((d) => d.driverNumber !== pinnedDriverNumber),
-      ]
-    : drivers;
+  // The pinned driver keeps its real position; a copy docks to whichever edge
+  // it went out of view past, as on desktop. Reordering it to the top made a
+  // pinned P20 show up above the leader.
+  const sortedDrivers = drivers;
+
+  const pinnedDriver = pinnedDriverNumber
+    ? drivers.find((d) => d.driverNumber === pinnedDriverNumber)
+    : undefined;
+
+  useEffect(() => {
+    if (!pinnedDriverNumber) {
+      setPinnedPos("visible");
+      return;
+    }
+
+    let frame: number | null = null;
+
+    const update = () => {
+      const card = cardRef.current;
+      if (!card) return;
+      const r = card.getBoundingClientRect();
+      setCardBounds({ top: r.top, bottom: r.bottom, left: r.left, width: r.width });
+
+      const row = card.querySelector<HTMLElement>('[data-pinned-row="true"]');
+      if (!row) return;
+      const rect = row.getBoundingClientRect();
+      // Clamped to the viewport: expanded, the card is taller than the screen.
+      const top = Math.max(r.top + HEADER_BLOCK_H, 0);
+      const bottom = Math.min(r.bottom, window.innerHeight);
+      if (rect.bottom < top) setPinnedPos("above");
+      else if (rect.top > bottom) setPinnedPos("below");
+      else setPinnedPos("visible");
+    };
+
+    const schedule = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        update();
+      });
+    };
+
+    // Capture: scroll does not bubble, and the scroller is the list when
+    // collapsed and the page column when expanded.
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule, { passive: true });
+    const observer = cardRef.current ? new ResizeObserver(schedule) : null;
+    if (cardRef.current && observer) observer.observe(cardRef.current);
+    update();
+
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      observer?.disconnect();
+    };
+  }, [pinnedDriverNumber, expanded]);
+
+  const dockedStyle = (): CSSProperties | null => {
+    if (pinnedPos === "visible" || !pinnedDriver || !cardBounds) return null;
+    const base: CSSProperties = {
+      position: "fixed",
+      left: cardBounds.left,
+      width: cardBounds.width,
+      zIndex: 30,
+    };
+    if (pinnedPos === "above") {
+      return { ...base, top: Math.max(0, cardBounds.top + HEADER_BLOCK_H) };
+    }
+    return {
+      ...base,
+      bottom: Math.max(0, window.innerHeight - Math.min(cardBounds.bottom, window.innerHeight)),
+    };
+  };
 
   return (
-    <div className="h-full flex flex-col bg-zinc-900/30 border border-zinc-800 rounded-lg overflow-hidden">
+    <div
+      ref={cardRef}
+      className={`${
+        expanded ? "h-auto" : "h-full"
+      } flex flex-col bg-zinc-900/30 border border-zinc-800 rounded-lg overflow-hidden`}
+    >
       {/* Session label + expand toggle */}
       <div className="flex items-center px-2 py-1 border-b border-zinc-800 bg-zinc-950/80 shrink-0 gap-2">
         <span
@@ -318,10 +428,25 @@ export default function MobileTimingBoard({
         <span className="w-14 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1">
           {t("timing.driver") || "PILOTO"}
         </span>
-        <span className="w-12 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1">
-          {t("timing.tire") || "NEU"}
+        <span className="w-12 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1 truncate">
+          {t("timing.tireShort")}
         </span>
-        <span className="flex-1 text-right pr-2 text-[10px] tracking-widest text-zinc-600 uppercase">GAP</span>
+        <span className="w-9 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase">
+          {t("timing.pit")}
+        </span>
+        <button
+          type="button"
+          onClick={toggleGapPrimary}
+          title={t(
+            gapPrimary === "gap"
+              ? "timing.gapToggleTooltip"
+              : "timing.intervalToggleTooltip",
+          )}
+          className="flex-1 flex items-center justify-end gap-1 pr-2 text-[10px] tracking-widest text-zinc-600 uppercase active:text-zinc-300 transition-colors"
+        >
+          {t(gapPrimary === "gap" ? "timing.gap" : "timing.interval")}
+          <ArrowUpDown size={8} className="opacity-60 shrink-0" />
+        </button>
         <span className="w-[68px] flex-shrink-0 text-right text-[10px] tracking-widest text-zinc-600 uppercase">
           {t("timing.lastLap") || "ÚLT. VTA"}
         </span>
@@ -329,7 +454,7 @@ export default function MobileTimingBoard({
       </div>
 
       {/* Driver list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className={expanded ? "" : "flex-1 overflow-y-auto"}>
         {sortedDrivers.length === 0 ? (
           <div className="flex items-center justify-center h-full text-zinc-600 text-xs">
             {t("timing.waitingData")}
@@ -342,12 +467,39 @@ export default function MobileTimingBoard({
               eliminationCutoff={eliminationCutoff}
               isExpanded={expandedDriver === d.driverNumber}
               isPinned={pinnedDriverNumber === d.driverNumber}
+              gapPrimary={gapPrimary}
               onToggle={() => toggleExpand(d.driverNumber)}
               onPin={() => togglePin(d.driverNumber)}
             />
           ))
         )}
       </div>
+
+      {/* The pinned row, docked to whichever edge it went out of view past.
+          Fixed to the viewport and matched to the card's width, so it lands on
+          the visible edge whether the list or the page column is scrolling. */}
+      {pinnedDriver && dockedStyle() && (
+        <div
+          style={dockedStyle() as CSSProperties}
+          className="bg-zinc-900 border-y border-zinc-700 shadow-lg shadow-black/50"
+        >
+          <DriverRowMobile
+            driver={pinnedDriver}
+            eliminationCutoff={eliminationCutoff}
+            isExpanded={false}
+            isPinned
+            gapPrimary={gapPrimary}
+            docked
+            onToggle={() => {
+              const row = cardRef.current?.querySelector<HTMLElement>(
+                '[data-pinned-row="true"]',
+              );
+              row?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }}
+            onPin={() => togglePin(pinnedDriver.driverNumber)}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -54,13 +54,13 @@ export default function MapViewSettings({ view, update, reset }: Props) {
         title={t("map.view")}
         aria-label={t("map.view")}
         aria-expanded={open}
-        className={`flex h-12 w-12 items-center justify-center rounded-lg border shadow-lg shadow-black/40 transition-colors ${
+        className={`flex h-10 w-10 lg:h-12 lg:w-12 items-center justify-center rounded-lg border shadow-lg shadow-black/40 transition-colors ${
           open
             ? "border-zinc-500 bg-zinc-800 text-white"
             : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800 hover:text-white"
         }`}
       >
-        <Settings size={24} />
+        <Settings size={24} className="h-5 w-5 lg:h-6 lg:w-6" />
       </button>
 
       {open && (

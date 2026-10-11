@@ -122,6 +122,7 @@ const translations = {
     "violations.deletedPlural": "Tiempos eliminados",
 
     // TrackMap
+    "timing.tireShort": "NEU",
     "map.view": "Vista del mapa",
     "map.viewTop": "Cenital",
     "map.viewIso": "Isométrica",
@@ -369,6 +370,7 @@ const translations = {
     "violations.deletedPlural": "Times deleted",
 
     // TrackMap
+    "timing.tireShort": "TYRE",
     "map.view": "Map view",
     "map.viewTop": "Top-down",
     "map.viewIso": "Isometric",

@@ -154,7 +154,8 @@ export default function AlertStrip({ alert }: { alert: AlertData }) {
 
   return (
     <div
-      className="relative shrink-0 flex items-center gap-2 px-3 py-2.5 min-h-[52px] border rounded-lg text-[13px] overflow-hidden transition-[background-color,border-color,box-shadow] duration-700"
+      // Shorter on a phone: 52px is a quarter of the map's height there.
+      className="relative shrink-0 flex items-center gap-2 px-3 py-1.5 min-h-[38px] lg:py-2.5 lg:min-h-[52px] border rounded-lg text-xs lg:text-[13px] overflow-hidden transition-[background-color,border-color,box-shadow] duration-700"
       style={
         fresh
           ? {

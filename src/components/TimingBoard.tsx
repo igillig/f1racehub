@@ -5,6 +5,7 @@ import { Driver } from "@/types/f1";
 import { Card } from "@/components/ui/card";
 import DriverRow from "./DriverRow";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useGapPrimary } from "@/hooks/useGapPrimary";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpDown } from "lucide-react";
 
@@ -66,20 +67,9 @@ export default function TimingBoard({
 
   const [pinnedPos, setPinnedPos] = useState<PinnedPos>("visible");
 
-  const isRace = /^(Race|Sprint)$/i.test(sessionName || "");
-  const [gapPrimary, setGapPrimary] = useState<"gap" | "interval">(
-    isRace ? "interval" : "gap",
-  );
-
-  // Applied once per session type, never on every render: the session name can
-  // arrive a frame after mount, and once the user has clicked the header the
-  // choice is theirs until the session itself changes.
-  const defaultAppliedForRef = useRef<boolean | null>(sessionName ? isRace : null);
-  useEffect(() => {
-    if (!sessionName || defaultAppliedForRef.current === isRace) return;
-    defaultAppliedForRef.current = isRace;
-    setGapPrimary(isRace ? "interval" : "gap");
-  }, [isRace, sessionName]);
+  // Which figure leads, with the race-aware default. Shared with the mobile
+  // board. The other value still shows underneath; the header toggles them.
+  const { gapPrimary, toggle: toggleGapPrimary } = useGapPrimary(sessionName);
   const [cardBounds, setCardBounds] = useState<{
     top: number;
     bottom: number;
@@ -229,7 +219,7 @@ export default function TimingBoard({
             <button
               className="text-right flex items-center justify-end gap-1 w-full cursor-pointer hover:text-foreground transition-colors"
               title={t(gapPrimary === "gap" ? "timing.gapToggleTooltip" : "timing.intervalToggleTooltip")}
-              onClick={() => setGapPrimary((p) => (p === "gap" ? "interval" : "gap"))}
+              onClick={toggleGapPrimary}
             >
               {t(gapPrimary === "gap" ? "timing.gap" : "timing.interval")}
               <ArrowUpDown size={9} className="opacity-50 shrink-0" />

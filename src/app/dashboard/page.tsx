@@ -265,11 +265,15 @@ export default function DashboardPage() {
           <div
             ref={split.containerRef}
             className={`flex-1 min-h-0 flex flex-col lg:flex-row gap-2 p-2 ${
-              split.dragging ? "select-none" : ""
-            }`}
+              tableExpanded ? "overflow-y-auto lg:overflow-visible" : ""
+            } ${split.dragging ? "select-none" : ""}`}
           >
           {/* Mobile timing board */}
-          <div className={`lg:hidden min-h-0 ${tableExpanded ? "flex-1" : "flex-[60]"}`}>
+          <div
+            className={`lg:hidden ${
+              tableExpanded ? "shrink-0" : "flex-[60] min-h-0"
+            }`}
+          >
             <MobileTimingBoard
               drivers={drivers}
               sessionName={sessionInfo.sessionName}
@@ -332,10 +336,16 @@ export default function DashboardPage() {
 
             return (
               <div
-                className={`${tableExpanded ? "flex-none lg:flex-1" : "flex-[40] lg:flex-1"} min-h-0 flex flex-col gap-1`}
+                // Expanded, the column scrolls and this gets pushed below
+                // the fold instead of squashed to a bar of headers.
+                className={`${
+                  tableExpanded
+                    ? "min-h-[320px] shrink-0 lg:min-h-0 lg:flex-1"
+                    : "flex-[40] min-h-0 lg:flex-1"
+                } flex flex-col gap-1`}
                 style={{ minWidth: tableExpanded ? undefined : 220 }}
               >
-                <div className={`border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden flex flex-col ${tableExpanded ? "flex-none" : "flex-1 min-h-0"}`}>
+                <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden flex flex-col flex-1 min-h-0">
                   {/* Tab bar */}
                   <div className="flex shrink-0 border-b border-zinc-800 bg-zinc-950/40">
                     {tabs.map((tab) => (
@@ -350,7 +360,13 @@ export default function DashboardPage() {
                         }`}
                       >
                         <tab.icon size={13} style={{ color: tab.color }} />
-                        <span className={tableExpanded ? "hidden" : "inline"}>{tab.label}</span>
+                        <span
+                          className={
+                            tableExpanded ? "inline lg:hidden" : "inline"
+                          }
+                        >
+                          {tab.label}
+                        </span>
                         {activeTab === tab.id && (
                           <motion.div
                             layoutId="tab-indicator"
@@ -363,9 +379,8 @@ export default function DashboardPage() {
                     ))}
                   </div>
 
-                  {/* Tab content — hidden when table is expanded */}
-                  {!tableExpanded && (
-                    <div className="flex-1 min-h-0 overflow-hidden">
+                  {/* Tab content */}
+                  <div className="flex-1 min-h-0 overflow-hidden">
                       {activeTab === "map" &&
                         (() => {
                           const activeNum = hoveredDriverNumber ?? pinnedDriverNumber;
@@ -410,12 +425,11 @@ export default function DashboardPage() {
                           sessionName={sessionInfo.sessionName}
                         />
                       )}
-                      {activeTab === "radio" && <TeamRadios radios={teamRadios} drivers={drivers} />}
-                    </div>
-                  )}
+                    {activeTab === "radio" && <TeamRadios radios={teamRadios} drivers={drivers} />}
+                  </div>
                 </div>
 
-                {latestAlert && !tableExpanded && <AlertStrip alert={latestAlert} />}
+                {latestAlert && <AlertStrip alert={latestAlert} />}
               </div>
             );
           })()}
