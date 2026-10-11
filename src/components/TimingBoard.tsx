@@ -65,7 +65,21 @@ export default function TimingBoard({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const [pinnedPos, setPinnedPos] = useState<PinnedPos>("visible");
-  const [gapPrimary, setGapPrimary] = useState<"gap" | "interval">("gap");
+
+  const isRace = /^(Race|Sprint)$/i.test(sessionName || "");
+  const [gapPrimary, setGapPrimary] = useState<"gap" | "interval">(
+    isRace ? "interval" : "gap",
+  );
+
+  // Applied once per session type, never on every render: the session name can
+  // arrive a frame after mount, and once the user has clicked the header the
+  // choice is theirs until the session itself changes.
+  const defaultAppliedForRef = useRef<boolean | null>(sessionName ? isRace : null);
+  useEffect(() => {
+    if (!sessionName || defaultAppliedForRef.current === isRace) return;
+    defaultAppliedForRef.current = isRace;
+    setGapPrimary(isRace ? "interval" : "gap");
+  }, [isRace, sessionName]);
   const [cardBounds, setCardBounds] = useState<{
     top: number;
     bottom: number;
