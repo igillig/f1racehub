@@ -122,6 +122,16 @@ const translations = {
     "violations.deletedPlural": "Tiempos eliminados",
 
     // TrackMap
+    "map.view": "Vista del mapa",
+    "map.viewTop": "Cenital",
+    "map.viewIso": "Isométrica",
+    "map.tilt": "Inclinación",
+    "map.spin": "Giro",
+    "map.thickness": "Grosor",
+    "map.shadow": "Sombra",
+    "map.backdrop": "Fondo",
+    "map.trackWidth": "Ancho de pista",
+    "map.reset": "Restablecer la vista",
     "map.loading": "Cargando mapa...",
     "map.error": "Error al cargar el mapa",
     "map.notAvailable": "Mapa no disponible",
@@ -359,6 +369,16 @@ const translations = {
     "violations.deletedPlural": "Times deleted",
 
     // TrackMap
+    "map.view": "Map view",
+    "map.viewTop": "Top-down",
+    "map.viewIso": "Isometric",
+    "map.tilt": "Tilt",
+    "map.spin": "Rotation",
+    "map.thickness": "Thickness",
+    "map.shadow": "Shadow",
+    "map.backdrop": "Backdrop",
+    "map.trackWidth": "Track width",
+    "map.reset": "Reset the view",
     "map.loading": "Loading map...",
     "map.error": "Error loading map",
     "map.notAvailable": "Map not available",

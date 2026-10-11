@@ -9,6 +9,8 @@ import {
 } from "@/types/f1";
 import { TEAM_COLORS } from "@/lib/constants";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useMapView } from "@/hooks/useMapView";
+import MapViewSettings from "./MapViewSettings";
 import WeatherOverlay from "@/components/WeatherOverlay";
 
 interface MarshalSector {
@@ -103,6 +105,68 @@ const PROXY_MAP_RETRY_MS = 30_000;
 // Helper functions
 const rad = (deg: number) => deg * (Math.PI / 180);
 
+/**
+ * Ground point to screen, for the isometric view.
+ *
+ * Spin turns the circuit on the ground, tilt lays the ground away from the
+ * viewer by squashing the depth axis. There is no height term because there is
+ * no elevation in the data: multiviewer ships two arrays of x/y, and so does
+ * the outline the proxy builds from GPS. A real 3D scene would be this same
+ * flat plane tilted in space.
+ *
+ * Applied to the points rather than as a transform on the SVG, so text, car
+ * markers and stroke widths stay in screen space — upright labels and an even
+ * line weight.
+ */
+const isoProject = (
+  x: number,
+  y: number,
+  spin: number,
+  tilt: number,
+  px: number,
+  py: number,
+) => {
+  const c = Math.cos(rad(spin));
+  const s = Math.sin(rad(spin));
+  const dx = x - px;
+  const dy = y - py;
+  return {
+    x: px + dx * c - dy * s,
+    y: py + (dx * s + dy * c) * Math.cos(rad(tilt)),
+  };
+};
+
+/**
+ * Asphalt in the isometric view.
+ *
+ * The slab's flank is a darkened copy of the track, and the map panel sits on
+ * a near-black background — a dark edge under an already near-black ribbon
+ * reads as nothing at all. Lifting the asphalt here gives the flank somewhere
+ * to go without touching the panel's own colour. The top-down view keeps the
+ * original zinc, where there is no flank to separate from.
+ */
+const ISO_EDGE = "#53535e";
+const ISO_EDGE_RGB: [number, number, number] = [83, 83, 94];
+const ISO_SURFACE = "#3a3a44";
+/** #ffb900, the yellow the map has always painted flagged sectors with. */
+const YELLOW_FLAG_RGB: readonly [number, number, number] = [255, 185, 0];
+/**
+ * And the panel lifts off the near-black page, so the cast shadow has
+ * something to darken. Only in the isometric view — "Cenital" is meant to be
+ * the map exactly as it was.
+ *
+ * 0 is the page's own colour, so no lift at all; 100 a light slate.
+ */
+const BACKDROP_FROM: readonly [number, number, number] = [9, 9, 11];
+const BACKDROP_TO: readonly [number, number, number] = [45, 49, 62];
+
+const backdropColour = (level: number) => {
+  const k = Math.min(Math.max(level, 0), 100) / 100;
+  const channel = (i: number) =>
+    Math.round(BACKDROP_FROM[i] + (BACKDROP_TO[i] - BACKDROP_FROM[i]) * k);
+  return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
+};
+
 const rotate = (x: number, y: number, a: number, px: number, py: number) => {
   const c = Math.cos(rad(a));
   const s = Math.sin(rad(a));
@@ -127,6 +191,19 @@ export default function TrackMap({
   weather,
 }: TrackMapProps) {
   const { t } = useLanguage();
+  const { view, update: updateView, reset: resetView } = useMapView();
+
+  // Every world coordinate in this component goes through here: the track
+  // polyline, the corner markers and the GPS fixes. Keeping it in one place is
+  // what makes the car positions land on the track in either view.
+  const toScreen = useCallback(
+    (x: number, y: number, a: number, px: number, py: number) => {
+      const flat = rotate(x, y, a, px, py);
+      if (!view.iso) return flat;
+      return isoProject(flat.x, flat.y, view.spin, view.tilt, px, py);
+    },
+    [view.iso, view.spin, view.tilt],
+  );
   const [mapData, setMapData] = useState<MapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -241,7 +318,7 @@ export default function TrackMap({
       const fixedRotation = (mapData.rotation || 0) + ROTATION_FIX;
 
       const rotatedPoints = mapData.x.map((x, index) =>
-        rotate(x, mapData.y[index], fixedRotation, cx, cy),
+        toScreen(x, mapData.y[index], fixedRotation, cx, cy),
       );
 
       const pointsX = rotatedPoints.map((item) => item.x);
@@ -255,14 +332,14 @@ export default function TrackMap({
       const cornerPositions =
         mapData.corners?.map((corner) => ({
           number: corner.number,
-          pos: rotate(
+          pos: toScreen(
             corner.trackPosition.x,
             corner.trackPosition.y,
             fixedRotation,
             cx,
             cy,
           ),
-          labelPos: rotate(
+          labelPos: toScreen(
             corner.trackPosition.x + 540 * Math.cos(rad(corner.angle)),
             corner.trackPosition.y + 540 * Math.sin(rad(corner.angle)),
             fixedRotation,
@@ -279,7 +356,7 @@ export default function TrackMap({
         centerY: cy,
         corners: cornerPositions,
       };
-    }, [mapData]);
+    }, [mapData, toScreen]);
 
   // Get mini sector boundaries from mapData
   // miniSectorsIndexes tells us where each mini sector ends in the track points array
@@ -469,7 +546,7 @@ export default function TrackMap({
         // fractional index — snapping to whole points (~15m apart) turns a
         // smooth feed into visible steps.
         const project = (gx: number, gy: number) => {
-          const rotated = rotate(gx, gy, rotation, centerX, centerY);
+          const rotated = toScreen(gx, gy, rotation, centerX, centerY);
           let minDist = Infinity;
           let nearestIdx = 0;
           for (let i = 0; i < totalPoints; i++) {
@@ -572,7 +649,7 @@ export default function TrackMap({
     });
 
     return targets;
-  }, [drivers, points, bounds, mapData, rotation, centerX, centerY]);
+  }, [drivers, points, bounds, mapData, rotation, centerX, centerY, toScreen]);
 
   // Helper to interpolate between two track points
   const getInterpolatedPoint = useCallback(
@@ -952,6 +1029,62 @@ export default function TrackMap({
     return "";
   };
 
+  // Every width scales off the outer ribbon, so one slider keeps the outline,
+  // the surface, the flag overlays and the start/finish line in proportion.
+  const widthScale = view.width / 300;
+  // Thickness is stored as a share of the ribbon's width, so the two stay in
+  // proportion however wide the track is set.
+  const slabDepth = (view.width * view.depthPct) / 100;
+  const trackPath = `M${points[0].x},${points[0].y} ${points
+    .map((point) => `L${point.x},${point.y}`)
+    .join(" ")} Z`;
+
+  // The flank of the slab: one copy of the ribbon per step, painted deepest
+  // first. Colour and opacity both ramp down so the body dissolves into the
+  // shadow instead of ending on a hard edge.
+  const flankFor = ([r, g, b]: readonly [number, number, number]) => {
+    if (!view.iso || slabDepth <= 0) return [];
+    const steps = Math.min(32, Math.max(8, Math.round(slabDepth / 4)));
+    return Array.from({ length: steps }, (_, i) => {
+      const k = (i + 1) / steps; // 1 = deepest
+      const shade = (c: number) => Math.round(c * (0.62 - 0.5 * k));
+      return {
+        dy: slabDepth * k,
+        fill: `rgb(${shade(r)}, ${shade(g)}, ${shade(b)})`,
+        opacity: 1 - 0.6 * k * k,
+      };
+    }).reverse();
+  };
+
+  // A full-lap flag is drawn as a translucent wash over the whole ribbon, so
+  // the slab's flank has to pick up the colour the surface ends up with —
+  // otherwise the lap is orange on top and grey down the side.
+  const fullLapWash = (() => {
+    if (isRedFlag) return null; // red already repaints the surface itself
+    if (trackStatus?.status === 4) return { rgb: [255, 165, 0] as const, alpha: 0.5 };
+    if (trackStatus?.status === 6) return { rgb: [255, 185, 0] as const, alpha: 0.45 };
+    if (
+      isYellowFlag &&
+      (yellowFlagSectors.size === 0 ||
+        (!miniSectorBoundaries && !marshalSectorBoundaries))
+    )
+      return { rgb: [255, 185, 0] as const, alpha: 0.5 };
+    return null;
+  })();
+
+  const slabBase: readonly [number, number, number] = isRedFlag
+    ? [255, 68, 68]
+    : fullLapWash
+      ? (ISO_EDGE_RGB.map((c, i) =>
+          Math.round(fullLapWash.rgb[i] * fullLapWash.alpha + c * (1 - fullLapWash.alpha)),
+        ) as unknown as [number, number, number])
+      : ISO_EDGE_RGB;
+
+  const slabLayers = flankFor(slabBase);
+  // A flagged sector needs its own flank, or the colour reads as tape stuck on
+  // a grey slab instead of a stretch of track that is actually yellow.
+  const yellowFlank = flankFor(YELLOW_FLAG_RGB);
+
   return (
     <div className="relative h-full w-full flex flex-col">
       {mapNotices.length > 0 && (
@@ -963,8 +1096,16 @@ export default function TrackMap({
           {mapNotices.join(" · ")}
         </div>
       )}
-      <div className="relative flex-1 min-h-0 flex items-center justify-center py-0 px-1">
+      <div
+        className="relative flex-1 min-h-0 flex items-center justify-center py-0 px-1"
+        style={
+          view.iso
+            ? { backgroundColor: backdropColour(view.backdrop) }
+            : undefined
+        }
+      >
       {weather && <WeatherOverlay weather={weather} />}
+      <MapViewSettings view={view} update={updateView} reset={resetView} />
       <svg
         viewBox={`${minX} ${minY} ${widthX} ${widthY}`}
         className="w-full h-full"
@@ -982,6 +1123,51 @@ export default function TrackMap({
           ))}
         </defs>
 
+        {view.iso && view.shadow > 0 && (
+          <>
+            <defs>
+              <filter
+                id="track-cast-shadow"
+                x="-20%"
+                y="-20%"
+                width="140%"
+                height="140%"
+              >
+                <feGaussianBlur stdDeviation={Math.max(1, view.shadow * 0.22)} />
+              </filter>
+            </defs>
+            {/* Cast shadow: one blurred copy of the ribbon dropped below the
+                slab. This is what makes the track read as lifted rather than
+                as a wall ending in a hard line. */}
+            <path
+              d={trackPath}
+              transform={`translate(0 ${slabDepth + view.shadow * 0.55})`}
+              fill="none"
+              stroke="#000"
+              strokeOpacity={0.5}
+              strokeWidth={view.width * 1.1}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              filter="url(#track-cast-shadow)"
+            />
+          </>
+        )}
+
+        {/* Flank of the slab */}
+        {slabLayers.map((layer, i) => (
+          <path
+            key={`slab-${i}`}
+            d={trackPath}
+            transform={`translate(0 ${layer.dy})`}
+            fill="none"
+            stroke={layer.fill}
+            strokeOpacity={layer.opacity}
+            strokeWidth={view.width}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+
         {/* Track fill - changes color on red flag */}
         <path
           strokeWidth={0}
@@ -994,9 +1180,11 @@ export default function TrackMap({
 
         {/* Track outline */}
         <path
-          stroke={isRedFlag ? "#ff4444" : undefined}
-          className={isRedFlag ? "" : "stroke-zinc-700"}
-          strokeWidth={300}
+          stroke={
+            isRedFlag ? "#ff4444" : view.iso ? ISO_EDGE : undefined
+          }
+          className={isRedFlag || view.iso ? "" : "stroke-zinc-700"}
+          strokeWidth={view.width}
           strokeLinejoin="round"
           strokeLinecap="round"
           fill="transparent"
@@ -1008,8 +1196,9 @@ export default function TrackMap({
 
         {/* Track surface */}
         <path
-          className="stroke-zinc-800"
-          strokeWidth={200}
+          stroke={view.iso ? ISO_SURFACE : undefined}
+          className={view.iso ? "" : "stroke-zinc-800"}
+          strokeWidth={200 * widthScale}
           strokeLinejoin="round"
           strokeLinecap="round"
           fill="transparent"
@@ -1028,7 +1217,7 @@ export default function TrackMap({
           // Perpendicular unit vector
           const px = -dy / len;
           const py = dx / len;
-          const half = 350;
+          const half = 350 * widthScale;
           return (
             <line
               x1={p0.x + px * half}
@@ -1036,7 +1225,7 @@ export default function TrackMap({
               x2={p0.x - px * half}
               y2={p0.y - py * half}
               stroke="white"
-              strokeWidth={20}
+              strokeWidth={20 * widthScale}
               strokeLinecap="round"
               opacity={0.9}
             />
@@ -1045,16 +1234,29 @@ export default function TrackMap({
 
         {/* Yellow flag mini sectors overlay */}
         {Array.from(yellowFlagSectors).map((sectorNum) => (
-          <path
-            key={`yellow-sector-${sectorNum}`}
-            stroke="#ffb900"
-            strokeWidth={220}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            fill="transparent"
-            className="yellow-flag-sector"
-            d={getMiniSectorPath(sectorNum)}
-          />
+          <g key={`yellow-sector-${sectorNum}`} className="yellow-flag-sector">
+            {yellowFlank.map((layer, i) => (
+              <path
+                key={i}
+                d={getMiniSectorPath(sectorNum)}
+                transform={`translate(0 ${layer.dy})`}
+                fill="none"
+                stroke={layer.fill}
+                strokeOpacity={layer.opacity}
+                strokeWidth={220 * widthScale}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            ))}
+            <path
+              stroke="#ffb900"
+              strokeWidth={220 * widthScale}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              fill="transparent"
+              d={getMiniSectorPath(sectorNum)}
+            />
+          </g>
         ))}
 
         {/* Full track yellow flag when status is yellow but no specific sector,
@@ -1062,7 +1264,7 @@ export default function TrackMap({
         {isYellowFlag && (yellowFlagSectors.size === 0 || (!miniSectorBoundaries && !marshalSectorBoundaries)) && (
           <path
             stroke="#ffb900"
-            strokeWidth={220}
+            strokeWidth={220 * widthScale}
             strokeLinejoin="round"
             strokeLinecap="round"
             fill="transparent"
@@ -1077,7 +1279,7 @@ export default function TrackMap({
         {trackStatus?.status === 6 && (
           <path
             stroke="#ffb900"
-            strokeWidth={220}
+            strokeWidth={220 * widthScale}
             strokeLinejoin="round"
             strokeLinecap="round"
             fill="transparent"
@@ -1092,7 +1294,7 @@ export default function TrackMap({
         {trackStatus?.status === 4 && (
           <path
             stroke="#FFA500"
-            strokeWidth={220}
+            strokeWidth={220 * widthScale}
             strokeLinejoin="round"
             strokeLinecap="round"
             fill="transparent"
