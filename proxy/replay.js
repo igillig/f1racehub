@@ -22,6 +22,7 @@ import {
   updateBestLap,
   flagToTrackStatus,
   detectSafetyCar,
+  mergeSegments,
 } from "./state-utils.js";
 
 // Session key — resolved at startup: latest race from OpenF1 > env var override > Baku 2024
@@ -527,9 +528,12 @@ function processData(data, state) {
     if (lap.duration_sector_1) entry.sector_1 = lap.duration_sector_1;
     if (lap.duration_sector_2) entry.sector_2 = lap.duration_sector_2;
     if (lap.duration_sector_3) entry.sector_3 = lap.duration_sector_3;
-    if (lap.segments_sector_1) entry.segments_1 = lap.segments_sector_1;
-    if (lap.segments_sector_2) entry.segments_2 = lap.segments_sector_2;
-    if (lap.segments_sector_3) entry.segments_3 = lap.segments_sector_3;
+    // Merged, not replaced: OpenF1 blanks the first minisector of sector 1 in
+    // most lap rows, and replay has no SignalR feed to fill it back in. See
+    // mergeSegments().
+    entry.segments_1 = mergeSegments(entry.segments_1, lap.segments_sector_1);
+    entry.segments_2 = mergeSegments(entry.segments_2, lap.segments_sector_2);
+    entry.segments_3 = mergeSegments(entry.segments_3, lap.segments_sector_3);
     entry.is_pit_out_lap = lap.is_pit_out_lap || false;
   });
 

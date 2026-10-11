@@ -18,6 +18,8 @@ import {
   flagToTrackStatus,
   detectSafetyCar,
   queueLocationFix,
+  mergeSegments,
+  keepFirstSegment,
 } from "./state-utils.js";
 
 // MQTT Configuration
@@ -404,22 +406,12 @@ function handleLap(data, fromHistory = false) {
   if (data.duration_sector_2 != null) entry.sector_2 = data.duration_sector_2;
   if (data.duration_sector_3 != null) entry.sector_3 = data.duration_sector_3;
 
-  // Only overwrite segments if MQTT delivers a non-empty array (completed-lap data)
-  if (
-    Array.isArray(data.segments_sector_1) &&
-    data.segments_sector_1.length > 0
-  )
-    entry.segments_1 = data.segments_sector_1;
-  if (
-    Array.isArray(data.segments_sector_2) &&
-    data.segments_sector_2.length > 0
-  )
-    entry.segments_2 = data.segments_sector_2;
-  if (
-    Array.isArray(data.segments_sector_3) &&
-    data.segments_sector_3.length > 0
-  )
-    entry.segments_3 = data.segments_sector_3;
+  // Only overwrite segments if MQTT delivers a non-empty array (completed-lap
+  // data), and merge rather than replace — OpenF1's arrays have holes. See
+  // mergeSegments().
+  entry.segments_1 = mergeSegments(entry.segments_1, data.segments_sector_1);
+  entry.segments_2 = mergeSegments(entry.segments_2, data.segments_sector_2);
+  entry.segments_3 = mergeSegments(entry.segments_3, data.segments_sector_3);
 
   entry.is_pit_out_lap = data.is_pit_out_lap || false;
 
@@ -447,7 +439,14 @@ function handleLap(data, fromHistory = false) {
     // known at the finish line, so clearing sector_3 here erases it before it's
     // ever shown (bug #9). Sector times are overwritten as the next lap's
     // sectors complete.
-    entry.segments_1 = [];
+    //
+    // Exception: the first minisector of sector 1. The car is already inside it
+    // when it crosses the line, so it is not "not driven yet" — and the
+    // official feed agrees. In the Singapore sprint it reset segments 1..7 of
+    // sector 1 to Status 0 about 359 times each at the line, and segment 0 not
+    // once. Blanking it here left that one bar grey for a whole race, because
+    // neither feed reliably writes it again afterwards.
+    entry.segments_1 = keepFirstSegment(entry.segments_1);
     entry.segments_2 = [];
     entry.segments_3 = [];
   }

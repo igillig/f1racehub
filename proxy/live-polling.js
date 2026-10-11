@@ -13,6 +13,7 @@ import {
   flagToTrackStatus,
   detectSafetyCar,
   queueLocationFix,
+  mergeSegments,
 } from "./state-utils.js";
 
 const API_BASE = "https://api.openf1.org/v1";
@@ -253,14 +254,16 @@ async function pollData() {
         entry.sector_1 = l.duration_sector_1 ?? null;
         entry.sector_2 = l.duration_sector_2 ?? null;
         entry.sector_3 = l.duration_sector_3 ?? null;
+        // Merged, not replaced: OpenF1 blanks the first minisector of sector 1
+        // in most lap rows. See mergeSegments().
         entry.segments_1 = Array.isArray(l.segments_sector_1)
-          ? l.segments_sector_1
+          ? mergeSegments(entry.segments_1, l.segments_sector_1)
           : [];
         entry.segments_2 = Array.isArray(l.segments_sector_2)
-          ? l.segments_sector_2
+          ? mergeSegments(entry.segments_2, l.segments_sector_2)
           : [];
         entry.segments_3 = Array.isArray(l.segments_sector_3)
-          ? l.segments_sector_3
+          ? mergeSegments(entry.segments_3, l.segments_sector_3)
           : [];
         entry.is_pit_out_lap = l.is_pit_out_lap || false;
 

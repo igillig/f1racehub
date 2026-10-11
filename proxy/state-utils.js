@@ -125,3 +125,47 @@ export function queueLocationFix(state, num, x, y, t) {
     queue.splice(0, queue.length - LOCATION_QUEUE_MAX);
   }
 }
+
+/**
+ * Merge an OpenF1 minisector array into whatever is already in state.
+ *
+ * OpenF1 leaves holes in these arrays, and always in the same slot: the first
+ * minisector of sector 1 arrives as `null`. Measured over the archived
+ * Singapore sprint, 188 of 316 lap rows had it, and across every archived
+ * session `null` never appeared at any other index of any sector.
+ *
+ * Copying the array wholesale therefore blanked that one bar — and it stayed
+ * blank, because the official feed does not reset segment 0 of sector 1 at the
+ * start/finish line the way it resets the rest, so nothing wrote over the hole
+ * afterwards. A hole means "no news for this slot", not "not driven yet": keep
+ * what is there, and use 0 (unknown) only when nothing is.
+ */
+export function mergeSegments(existing, incoming) {
+  if (!Array.isArray(incoming) || incoming.length === 0) return existing;
+  const merged = Array.isArray(existing) ? existing.slice() : [];
+  merged.length = incoming.length;
+  for (let i = 0; i < incoming.length; i++) {
+    const value = incoming[i];
+    if (value == null) {
+      if (merged[i] == null) merged[i] = 0;
+    } else {
+      merged[i] = value;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Reset sector 1's minisectors for a new lap, keeping the first one.
+ *
+ * Everything else about a new lap is genuinely undriven, but the car is already
+ * inside the first minisector of sector 1 when it crosses the line — the
+ * official feed never sends a Status 0 reset for it, only for the ones behind
+ * it. Returns an array of the same length so the bar count does not flicker.
+ */
+export function keepFirstSegment(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return [];
+  const reset = new Array(segments.length).fill(0);
+  if (segments[0] != null) reset[0] = segments[0];
+  return reset;
+}
