@@ -335,8 +335,6 @@ export default function DashboardPage() {
                 className={`${tableExpanded ? "flex-none lg:flex-1" : "flex-[40] lg:flex-1"} min-h-0 flex flex-col gap-1`}
                 style={{ minWidth: tableExpanded ? undefined : 220 }}
               >
-                {latestAlert && !tableExpanded && <AlertStrip alert={latestAlert} />}
-
                 <div className={`border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden flex flex-col ${tableExpanded ? "flex-none" : "flex-1 min-h-0"}`}>
                   {/* Tab bar */}
                   <div className="flex shrink-0 border-b border-zinc-800 bg-zinc-950/40">
@@ -416,6 +414,8 @@ export default function DashboardPage() {
                     </div>
                   )}
                 </div>
+
+                {latestAlert && !tableExpanded && <AlertStrip alert={latestAlert} />}
               </div>
             );
           })()}
