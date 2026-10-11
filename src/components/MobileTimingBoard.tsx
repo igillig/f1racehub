@@ -216,12 +216,9 @@ function DriverRowMobile({
                   </>
                 )}
 
-                {/* Right side: last lap + DRS + PIT count + pin */}
+                {/* Right side: last lap + PIT count + pin */}
                 <div className="ml-auto flex flex-col items-end gap-1">
                   <div className="flex items-center gap-2">
-                    {driver.drsEnabled && (
-                      <span className="text-[10px] font-bold text-green-400 border border-green-500 px-1 py-0.5 rounded">DRS</span>
-                    )}
                     <div className="flex flex-col items-end">
                       <span className="text-[8px] text-zinc-600 uppercase">{t("driver.lastLap")}</span>
                       <span className={cn("font-mono text-xs tabular-nums", lastLapColor)}>

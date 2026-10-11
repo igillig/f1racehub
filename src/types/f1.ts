@@ -32,7 +32,6 @@ export interface Driver {
   retired: boolean;
   knockedOut: boolean; // Eliminated in qualifying
   currentLap?: number;
-  drsEnabled?: boolean;
   positionChange?: number;
   lastLapPersonalBest?: boolean;
   lastLapOverallFastest?: boolean; // Last lap is the session's fastest lap

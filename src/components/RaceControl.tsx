@@ -55,6 +55,12 @@ function translateMessage(
     { regex: /SAFETY CAR ENDING/gi, key: "raceControl.msg.safetyCarEnding" },
     { regex: /VSC DEPLOYED/gi, key: "raceControl.msg.vscDeployed" },
     { regex: /VSC ENDING/gi, key: "raceControl.msg.vscEnding" },
+    // The 2026 rules replaced DRS with the override, and the feed changed
+    // wording with them: both OpenF1 /v1/race_control and SignalR
+    // RaceControlMessages now say "OVERTAKE ENABLED" / "OVERTAKE DISABLED".
+    // The DRS patterns stay for replays of sessions from before the change.
+    { regex: /OVERTAKE ENABLED/gi, key: "raceControl.msg.overtakeEnabled" },
+    { regex: /OVERTAKE DISABLED/gi, key: "raceControl.msg.overtakeDisabled" },
     { regex: /DRS ENABLED/gi, key: "raceControl.msg.drsEnabled" },
     { regex: /DRS DISABLED/gi, key: "raceControl.msg.drsDisabled" },
     { regex: /TRACK LIMITS/gi, key: "raceControl.msg.trackLimits" },
