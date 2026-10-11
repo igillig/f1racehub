@@ -89,6 +89,17 @@ export default function DashboardPage() {
     [],
   );
 
+  // Colour the alert strip flashes in. Mirrors the icon chain below: a red
+  // flag should not announce itself in the same colour as a track limits note.
+  const alertAccent = (m: string): string => {
+    if (m.includes("RED FLAG")) return "#ef4444";
+    if (m.includes("CHEQUERED")) return "#e4e4e7";
+    if (m.includes("SAFETY CAR") || m.includes("VSC") || m.includes("YELLOW"))
+      return "#facc15";
+    if (m.includes("GREEN")) return "#22c55e";
+    return "#a1a1aa";
+  };
+
   const latestAlert = (() => {
     const isRace = /^(Race|Sprint)$/i.test(sessionInfo.sessionName);
     const allMsgs = raceControlMessages.filter(
@@ -114,6 +125,8 @@ export default function DashboardPage() {
         time: radio.utc,
         icon: "📻" as string | null,
         color: "text-purple-400",
+        audio: radio.path,
+        accent: driver?.teamColor || "#a78bfa",
       };
     }
 
@@ -123,6 +136,7 @@ export default function DashboardPage() {
     return {
       label: isViolation ? t("alert.violations") : t("alert.raceControl"),
       color: isViolation ? "text-orange-400" : "text-zinc-400",
+      accent: isViolation ? "#f97316" : alertAccent(m),
       text: msg.message,
       time: msg.utc,
       icon: m.includes("CHEQUERED")
@@ -321,6 +335,8 @@ export default function DashboardPage() {
                 className={`${tableExpanded ? "flex-none lg:flex-1" : "flex-[40] lg:flex-1"} min-h-0 flex flex-col gap-1`}
                 style={{ minWidth: tableExpanded ? undefined : 220 }}
               >
+                {latestAlert && !tableExpanded && <AlertStrip alert={latestAlert} />}
+
                 <div className={`border border-zinc-800 rounded-lg bg-zinc-900/50 overflow-hidden flex flex-col ${tableExpanded ? "flex-none" : "flex-1 min-h-0"}`}>
                   {/* Tab bar */}
                   <div className="flex shrink-0 border-b border-zinc-800 bg-zinc-950/40">
@@ -400,8 +416,6 @@ export default function DashboardPage() {
                     </div>
                   )}
                 </div>
-
-                {latestAlert && !tableExpanded && <AlertStrip alert={latestAlert} />}
               </div>
             );
           })()}

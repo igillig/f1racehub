@@ -210,6 +210,8 @@ const translations = {
     "alert.raceControl": "Control de Carrera",
     "alert.violations": "Violaciones",
     "alert.radio": "Radio",
+    "alert.playRadio": "Reproducir la radio",
+    "alert.stopRadio": "Detener la radio",
 
     // Drawer nav
     "drawer.stats": "Estadísticas",
@@ -443,6 +445,8 @@ const translations = {
     "alert.raceControl": "Race Control",
     "alert.violations": "Violations",
     "alert.radio": "Radio",
+    "alert.playRadio": "Play the radio message",
+    "alert.stopRadio": "Stop the radio message",
 
     // Drawer nav
     "drawer.stats": "Statistics",
