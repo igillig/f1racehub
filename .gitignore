@@ -63,3 +63,5 @@ proxy/recordings/
 proxy/data/
 /data
 
+# Local performance notes
+PERFORMANCE.md
