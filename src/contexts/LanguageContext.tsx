@@ -247,6 +247,17 @@ const translations = {
     "viewers.watching": "Viendo ahora",
     "viewers.count": "{{count}} espectadores",
 
+    // Retraso de transmisión
+    "delay.title": "Retraso de transmisión",
+    "delay.live": "EN VIVO",
+    "delay.tooltip": "Retraso de transmisión — sincronizar con la TV",
+    "delay.hint":
+      "Los datos llegan antes que la TV. Atrasá el dashboard hasta que coincida con tu transmisión.",
+    "delay.syncing":
+      "Todavía no hay tanto historial guardado. Se completa en unos segundos.",
+    "delay.less": "Un segundo menos",
+    "delay.more": "Un segundo más",
+
     // Landing page
     "landing.nextRace": "Próxima Carrera",
     "landing.startsIn": "Comienza En",
@@ -492,6 +503,17 @@ const translations = {
     // Viewers
     "viewers.watching": "Watching now",
     "viewers.count": "{{count}} viewers",
+
+    // Broadcast delay
+    "delay.title": "Broadcast delay",
+    "delay.live": "LIVE",
+    "delay.tooltip": "Broadcast delay — sync with TV",
+    "delay.hint":
+      "The data gets here before TV does. Hold the dashboard back until it matches your broadcast.",
+    "delay.syncing":
+      "That much history isn't stored yet. It fills in within a few seconds.",
+    "delay.less": "One second less",
+    "delay.more": "One second more",
 
     // Landing page
     "landing.nextRace": "Next Race",

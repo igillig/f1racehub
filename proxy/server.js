@@ -34,6 +34,7 @@ import {
   isSignalRRunning,
   getRawSignalRDebug,
 } from "./signalr-client.js";
+import { createStreamBuffer, MAX_DELAY_MS } from "./stream-buffer.js";
 
 const PORT = process.env.PORT || 4000;
 
@@ -131,8 +132,15 @@ const KILL_PENDING_BYTES = 4 * 1024 * 1024;
 let updatePending = false;
 const delivery = { sent: 0, skipped: 0, dropped: 0, resyncs: 0 };
 
-function sseFrame(event, data) {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+// Rolling window of everything broadcast, so a viewer can join the stream
+// behind live without being shown the present first. See stream-buffer.js.
+const streamBuffer = createStreamBuffer();
+
+// Every frame carries the proxy's clock in the SSE `id:` field. A viewer
+// running the stream behind live needs it twice: to know when a frame is due,
+// and to measure how far their own clock sits from this one.
+function sseFrame(event, data, ts = Date.now()) {
+  return `id: ${ts}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 // Write one frame honouring backpressure. Returns false if it was not written.
@@ -163,7 +171,10 @@ function writeFrame(client, frame) {
 
 function flushUpdate() {
   updatePending = false;
-  if (sseClients.size === 0) return;
+  // No early return when nobody is connected: the delay buffer is a viewer
+  // that never disconnects, and it has to be warm before the first real one
+  // arrives or that viewer has nothing to join behind.
+  const ts = Date.now();
 
   // Lean frame: only what differs from what we last put on the wire.
   const lean = {};
@@ -194,7 +205,8 @@ function flushUpdate() {
     return;
   }
 
-  const leanFrame = sseFrame("update", lean);
+  const leanFrame = sseFrame("update", lean, ts);
+  streamBuffer.record(leanFrame, ts);
   let fullFrame = null; // built only if some client fell behind
 
   for (const [clientId, connections] of sseClients) {
@@ -202,7 +214,10 @@ function flushUpdate() {
       if (client._needsFull) {
         // This client missed at least one frame, so an occasional key we have
         // already marked as sent may never have reached it. Send everything.
-        if (fullFrame === null) fullFrame = sseFrame("update", currentState);
+        // Stamped with this frame's time like any other, which is what lets a
+        // delayed viewer queue the resync instead of jumping to the present.
+        if (fullFrame === null)
+          fullFrame = sseFrame("update", currentState, ts);
         if (writeFrame(client, fullFrame)) {
           client._needsFull = false;
           delivery.resyncs++;
@@ -216,6 +231,13 @@ function flushUpdate() {
   }
 
   drainLocationFixes();
+
+  // Taken after the frame for this timestamp — and after the GPS queue is
+  // drained — so the snapshot and the frames replayed on top of it never carry
+  // the same data twice.
+  if (streamBuffer.snapshotDue(ts)) {
+    streamBuffer.recordSnapshot(sseFrame("initial", currentState, ts), ts);
+  }
 }
 
 // GPS fixes are a delivery queue, not state: once a frame carries them they are
@@ -274,7 +296,12 @@ function broadcastSSE(event, data) {
   updatePending = false; // superseded by the frame below
   resetChangeTracking(); // next update must carry everything again
 
-  const frame = sseFrame(event, data);
+  const ts = Date.now();
+  const frame = sseFrame(event, data, ts);
+  // Recorded like any other frame, never cleared: a viewer running a minute
+  // behind still has the end of the previous session on screen and has to be
+  // told about the reset when it reaches them, not when it happens.
+  streamBuffer.record(frame, ts);
   for (const [clientId, connections] of sseClients) {
     for (const client of connections) {
       try {
@@ -535,6 +562,9 @@ const handleRequest = async (req, res) => {
       // SSE delivery health — `skipped` climbing means clients cannot keep up
       // with the stream, `maxPendingKB` is the worst socket's current backlog.
       delivery: { ...delivery, maxPendingKB: maxPendingKB() },
+      // How deep a viewer can set their broadcast delay, and how much of that
+      // window is actually stored right now.
+      streamDelay: streamBuffer.stats(),
       archive: archiveHealth(),
     };
     if (mode === "replay" && currentState.session) {
@@ -555,6 +585,13 @@ const handleRequest = async (req, res) => {
       reqUrl.searchParams.get("clientId") ||
       `anon-${Date.now()}-${Math.random()}`;
 
+    // How far behind live this viewer wants to be, in ms. The waiting happens
+    // in their browser; what the delay changes here is only where they start.
+    const requested = Number(reqUrl.searchParams.get("delay"));
+    const delayMs = Number.isFinite(requested)
+      ? Math.min(Math.max(requested, 0), MAX_DELAY_MS)
+      : 0;
+
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -568,7 +605,23 @@ const handleRequest = async (req, res) => {
 
     // The snapshot carries every key, so the first lean update can legitimately
     // omit the occasional ones.
-    res.write(sseFrame("initial", currentState));
+    //
+    // A delayed viewer gets a snapshot from before their delay plus every
+    // frame since, and sorts out the timing themselves. Nothing can interleave
+    // between the backlog and the registration below — there is no await here,
+    // so the flush timer cannot run in between and drop a frame on the floor.
+    const backlog =
+      delayMs > 0 ? streamBuffer.backlogFor(delayMs) : null;
+    if (backlog) {
+      res.write(backlog.snapshot);
+      for (const frame of backlog.frames) res.write(frame);
+      console.log(
+        `[proxy-sse] Delayed start (${clientId}): -${Math.round(delayMs / 1000)}s ` +
+          `→ snapshot ${(backlog.coverageMs / 1000).toFixed(1)}s old + ${backlog.frames.length} frames`,
+      );
+    } else {
+      res.write(sseFrame("initial", currentState));
+    }
     res._needsFull = false;
 
     let connections = sseClients.get(clientId);

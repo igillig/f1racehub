@@ -45,6 +45,12 @@ interface TrackMapProps {
   qualifyingPart?: number;
   hoveredDriverNumber?: string | null;
   weather?: WeatherData;
+  /**
+   * Increments when the data stream (re)connects. A reconnect serves a fresh
+   * snapshot, so the GPS playback buffer has to be reset here too — otherwise
+   * it keeps playing the pre-reconnect positions against the rewound stream.
+   */
+  streamEpoch?: number;
 }
 
 const SPACE = 1000;
@@ -189,6 +195,7 @@ export default function TrackMap({
   qualifyingPart,
   hoveredDriverNumber,
   weather,
+  streamEpoch = 0,
 }: TrackMapProps) {
   const { t } = useLanguage();
   const { view, update: updateView, reset: resetView } = useMapView();
@@ -290,12 +297,14 @@ export default function TrackMap({
   }, [circuitKey]);
 
   // Clear animated positions when session changes (Q1→Q2→Q3 or session restart)
+  // or when the stream reconnects (a fresh snapshot rewinds the data, so the
+  // GPS playback clock must restart from it rather than keep the live state).
   useEffect(() => {
     animatedPositionsRef.current.clear();
     gpsBufferRef.current.clear();
     gpsHeadRef.current = null;
     setAnimatedPositions(new Map());
-  }, [qualifyingPart, isSessionActive]);
+  }, [qualifyingPart, isSessionActive, streamEpoch]);
 
   const { points, bounds, rotation, centerX, centerY, corners } =
     useMemo(() => {

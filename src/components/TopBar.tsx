@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { TRACK_STATUS, COUNTRY_CODES } from "@/lib/constants";
 import { useLanguage } from "@/contexts/LanguageContext";
 import ScrollingText from "./ScrollingText";
+import BroadcastDelayControl from "./BroadcastDelayControl";
 
 function getCountryCode(country: string): string {
   return COUNTRY_CODES[country] || "un";
@@ -48,6 +49,10 @@ interface TopBarProps {
   latestRaceControlMessage?: { category?: string; message: string };
   onBannerComplete?: () => void;
   onMenuOpen?: () => void;
+  /** How far behind live the dashboard is running, in seconds. */
+  delaySeconds: number;
+  onDelayChange: (seconds: number) => void;
+  delaySyncing: boolean;
 }
 
 export default function TopBar({
@@ -56,6 +61,9 @@ export default function TopBar({
   latestRaceControlMessage,
   onBannerComplete,
   onMenuOpen,
+  delaySeconds,
+  onDelayChange,
+  delaySyncing,
 }: TopBarProps) {
   const statusInfo = TRACK_STATUS[trackStatus.status] || TRACK_STATUS[1];
   // trackStatus.message is authoritative for the text but the numeric code can lag —
@@ -320,6 +328,14 @@ export default function TopBar({
               </span>
             </div>
           )}
+
+          {/* Broadcast delay — always visible, so a delay set once and
+              forgotten cannot be mistaken for the data running late */}
+          <BroadcastDelayControl
+            seconds={delaySeconds}
+            onChange={onDelayChange}
+            syncing={delaySyncing}
+          />
 
           {/* Viewers count — desktop only */}
           {viewers > 0 && (

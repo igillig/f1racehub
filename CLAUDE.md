@@ -9,6 +9,7 @@ Browser (Next.js 14)
   └─ useF1DataSSE.ts (EventSource → /api/sse)
        └─ Next.js rewrite → proxy:4000
             └─ proxy/server.js (Node.js)
+                 ├─ stream-buffer.js  (rolling window of broadcast frames — delayed starts)
                  ├─ f1dash-client.js  (SSE from f1-dash.com)
                  ├─ mqtt-client.js    (OpenF1 MQTT — paid tier, primary live source)
                  ├─ live-polling.js   (OpenF1 REST polling — free, fallback)
@@ -45,6 +46,10 @@ Copy `.env.example` → `.env` (frontend) and `proxy/.env.example` → `proxy/.e
 | `proxy/server.js` | Proxy entry point — picks mode, starts SSE server |
 | `proxy/mqtt-client.js` | OpenF1 paid tier — OAuth2 + MQTT broker `mqtt.openf1.org:8883` |
 | `proxy/replay.js` | Historical replay — polls OpenF1 REST, auth-aware rate limits |
+| `proxy/stream-buffer.js` | Rolling window of broadcast frames + snapshots — serves delayed viewers their starting point |
+| `src/hooks/useBroadcastDelay.ts` | Per-browser "how far behind live" preference (0–60s) |
+| `src/lib/frameQueue.ts` | Frames received but not due yet |
+| `src/lib/serverClock.ts` | Estimate of the proxy's clock from frame timestamps |
 | `src/lib/constants.ts` | Team colors, tire types, track status mappings |
 | `src/types/f1.ts` | All TypeScript interfaces for F1 data |
 | `src/app/page.tsx` | Dashboard root — assembles all components |
@@ -87,6 +92,37 @@ Set `PROXY_MODE` in `proxy/.env`:
 - REST streaming fallback (only if the archive download fails): paid 6s cycle / 800ms delays, free 4s / 1800ms.
 - **Replay loops**: when the replay clock passes the last data point (+60s buffer), it broadcasts `reset` and restarts from the beginning. End is data-driven in DB mode (max ts across laps/location/position/intervals), `date_end` in REST mode. A generation counter (`replayGeneration`) kills stale poll chains across restarts.
 - Archived `drivers` get team info backfilled (OpenF1 returns null colours right after a session): pass 1 from the newest archived session, pass 2 from `/v1/drivers?driver_number=N` history (rookies). Drivers topic has `maxAttempts: 12` in the verify pass since colours can take hours to consolidate upstream.
+
+## Broadcast delay (viewer-set, 0–60s)
+
+The dashboard runs 30–60s ahead of the TV broadcast, so each viewer can hold it
+back by an amount of their own. The waiting happens **in the browser**: frames
+are queued and applied once the proxy's clock has moved past their timestamp
+plus the delay. The SSE stream itself stays a single shared broadcast — the
+delay never multiplies work on the server.
+
+- Every frame carries the proxy's send time in the SSE `id:` field. The client
+  estimates the proxy's clock from those stamps (`serverClock.ts`, minimum of
+  recent `local - server` samples) rather than trusting `Date.now()`.
+- **Starting point**: `currentState` is the present, so handing it to a delayed
+  viewer would spoil the next minute. `stream-buffer.js` keeps every broadcast
+  frame plus a full snapshot every 10s, and `/api/sse?delay=<ms>` serves the
+  newest snapshot older than the delay followed by every frame since. The
+  buffer records **even with no clients connected** — that is what makes the
+  first viewer's page load spoiler-free.
+- The delay is part of the connection (the proxy picks the starting point from
+  it), so changing it reconnects. The control debounces by 400ms so dragging
+  the slider costs one reconnect, not sixty.
+- `useF1DataSSE({ delayMs, ready })` keeps the stream closed until the stored
+  preference is known — connecting live first and correcting afterwards would
+  show exactly the seconds the viewer set a delay to avoid.
+- **The session clock must be extrapolated against the same timeline** (proxy
+  clock minus delay), not `Date.now()`, or the countdown runs live while the
+  table sits a minute behind it.
+- Everything outside the SSE stream (`/standings`, `session_result`, next
+  session) is **not** delayed. Minor spoiler surface, known and accepted.
+- With `delayMs === 0` frames are applied on arrival, bypassing the clock
+  estimate — the live path keeps its original latency.
 
 ## Frontend — `proxyMode` and Demo Banner
 
@@ -177,6 +213,10 @@ El objetivo central del dashboard es mostrar telemetría **lo más en vivo posib
 | Team radio | OpenF1 MQTT | SignalR no lo tiene |
 | Clima | OpenF1 MQTT | SignalR no lo tiene |
 | Car data (RPM, velocidad) | OpenF1 MQTT | SignalR no lo tiene |
+
+La única excepción es el **retraso de transmisión** que configura cada
+espectador (ver más arriba): el dato sigue llegando lo más rápido posible y la
+espera ocurre en el browser, nunca en la captura.
 
 **SignalR** = `livetiming.formula1.com` — feed oficial de la F1, gratuito, WebSocket, datos por evento (no polling).
 **OpenF1 MQTT** = paid tier, push-based, rico en datos pero segmentos/sectores solo llegan al completar la vuelta.

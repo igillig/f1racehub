@@ -13,6 +13,11 @@ import {
   CarData,
 } from "@/types/f1";
 import { CIRCUIT_TO_COUNTRY } from "@/lib/constants";
+import { createServerClock } from "@/lib/serverClock";
+import {
+  createFrameQueue,
+  type StreamEventName,
+} from "@/lib/frameQueue";
 
 // Use NEXT_PUBLIC_PROXY_URL if set (preferred — direct connection, no Next.js rewrite needed).
 // Falls back to /api/proxy (Next.js rewrite) for backwards compatibility.
@@ -34,6 +39,18 @@ interface F1DataState {
   error: string | null;
   proxyMode: string | null;
   signalrDegraded: boolean;
+  /**
+   * True while a requested delay cannot be honoured yet because the stream
+   * does not reach that far back — the first seconds after the proxy starts.
+   * What is on screen is older than live, just not by the full amount.
+   */
+  delaySyncing: boolean;
+  /**
+   * Increments on every (re)connect. Downstream state that keeps its own
+   * playback clock (the track map's GPS buffer) uses it to reset in step with
+   * the fresh snapshot a reconnect serves.
+   */
+  streamEpoch: number;
 }
 
 const defaultSessionInfo: SessionInfo = {
@@ -104,7 +121,27 @@ function computeSectorTimeStatus(
   return "yellow";
 }
 
-export function useF1DataSSE(): F1DataState {
+interface StreamOptions {
+  /**
+   * How far behind live to run, in ms. Zero streams as it arrives. Frames are
+   * held in a queue and applied once the proxy's clock has moved past their
+   * timestamp plus this much, which is what lets someone line the dashboard up
+   * with a TV broadcast. See useBroadcastDelay.
+   */
+  delayMs?: number;
+  /**
+   * Whether `delayMs` is final. The proxy picks a viewer's starting point from
+   * it, so the stream stays closed until it is known — connecting live first
+   * and correcting afterwards would show exactly the seconds a delay is set to
+   * avoid.
+   */
+  ready?: boolean;
+}
+
+export function useF1DataSSE({
+  delayMs = 0,
+  ready = true,
+}: StreamOptions = {}): F1DataState {
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [sessionInfo, setSessionInfo] =
     useState<SessionInfo>(defaultSessionInfo);
@@ -122,6 +159,30 @@ export function useF1DataSSE(): F1DataState {
   // True when there's a live session (mqtt-live) but the official SignalR
   // timing feed is down — some data arrives delayed or is missing.
   const [signalrDegraded, setSignalrDegraded] = useState(false);
+  const [delaySyncing, setDelaySyncing] = useState(false);
+  // Increments every time the stream (re)connects. A reconnect serves a fresh
+  // snapshot, so anything that keeps its own playback state keyed to the data
+  // clock — the track map's GPS buffer — has to be told to start over, or it
+  // keeps playing the pre-reconnect positions against a rewound stream.
+  const [streamEpoch, setStreamEpoch] = useState(0);
+
+  // ── Broadcast delay ────────────────────────────────────────────────────────
+  // Frames wait in the queue until the proxy's clock, as estimated from the
+  // timestamps the frames themselves carry, has moved past their own plus the
+  // delay. Everything downstream — the table, the map, the session clock — is
+  // then uniformly that far behind live, with no component left looking at the
+  // present.
+  const queueRef = useRef(createFrameQueue());
+  const serverClockRef = useRef(createServerClock());
+  const delayMsRef = useRef(delayMs);
+  delayMsRef.current = delayMs;
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
+  // Set when the proxy was reachable but the delay was not settled yet, so the
+  // stream can be opened as soon as it is.
+  const startWhenReadyRef = useRef(false);
+  // Send time of the newest frame applied, i.e. how old what is on screen is.
+  const lastAppliedTsRef = useRef<number | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -758,10 +819,77 @@ export function useF1DataSSE(): F1DataState {
     }
   }, []);
 
+  // Everything accumulated for one session. A fresh snapshot and a session
+  // reset both start from here; what they clear on top of it differs.
+  const clearSessionState = useCallback(() => {
+    setDrivers([]);
+    driverListRef.current = {};
+    timingRef.current = {};
+    maxSegCounts.current = { s1: 6, s2: 6, s3: 6 };
+    sessionFastestLapRef.current = Infinity;
+    sessionFastestDriverRef.current = null;
+    qualifyingPartRef.current = undefined;
+  }, []);
+
+  // The one place a frame reaches the UI, whether it was just received or has
+  // been waiting out a broadcast delay.
+  const applyFrame = useCallback(
+    (frame: { ts: number; event: StreamEventName; raw: string }) => {
+      lastAppliedTsRef.current = frame.ts;
+
+      // Proxy signals a session change — clear all accumulated state
+      if (frame.event === "reset") {
+        console.log("[SSE] Session reset — clearing state");
+        clearSessionState();
+        carDataRef.current = {};
+        setRaceControlMessages([]);
+        setTeamRadios([]);
+        return;
+      }
+
+      const data = JSON.parse(frame.raw);
+
+      if (frame.event === "initial") {
+        // Reset driver-related state so stale entries from a previous session
+        // don't persist. carDataRef (location) is intentionally NOT cleared: if
+        // this is a reconnect mid-session we keep last known positions so the
+        // map doesn't dump everyone to pit lane while waiting for the next MQTT
+        // location batch. processData below will overwrite with fresh positions
+        // as soon as they arrive.
+        clearSessionState();
+      }
+
+      if (Object.keys(data).length > 0) processData(data);
+    },
+    [processData, clearSessionState],
+  );
+
+  // Release every frame whose time has come. Called on arrival, so a viewer
+  // with no delay set sees it in the same tick, and on a timer, so a delayed
+  // viewer doesn't need a new frame to arrive before the previous one shows.
+  const drainDueFrames = useCallback(() => {
+    const delay = delayMsRef.current;
+    // No delay means due on arrival. Going through the clock estimate instead
+    // would cost every frame the network latency it has already spent, which
+    // is the opposite of what this dashboard is for.
+    const until =
+      delay === 0 ? Infinity : serverClockRef.current.now() - delay;
+    for (const frame of queueRef.current.drainUpTo(until)) applyFrame(frame);
+  }, [applyFrame]);
+
+  // What the last connect() asked the proxy for, so a change of mind can be
+  // told apart from a reconnect.
+  const connectedDelayRef = useRef(delayMs);
+
   const connect = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
+
+    // Bump the epoch before the snapshot arrives, so playback state that keeps
+    // its own clock (the map's GPS buffer) is cleared and re-keys to the
+    // snapshot rather than playing the old live positions against it.
+    setStreamEpoch((e) => e + 1);
 
     console.log(`[SSE] Connecting to ${PROXY_URL}/api/sse`);
 
@@ -771,8 +899,15 @@ export function useF1DataSSE(): F1DataState {
       localStorage.setItem("f1_client_id", clientId);
     }
 
+    // The delay travels with the connection: it decides where in its stored
+    // window the proxy starts this viewer off. Everything after that point is
+    // the same stream every other viewer gets.
+    const requestedDelay = delayMsRef.current;
+    connectedDelayRef.current = requestedDelay;
+    queueRef.current.clear();
+
     const eventSource = new EventSource(
-      `${PROXY_URL}/api/sse?clientId=${clientId}`,
+      `${PROXY_URL}/api/sse?clientId=${clientId}&delay=${requestedDelay}`,
     );
     eventSourceRef.current = eventSource;
 
@@ -788,54 +923,37 @@ export function useF1DataSSE(): F1DataState {
       }
     };
 
-    eventSource.addEventListener("initial", (event) => {
-      const data = JSON.parse(event.data);
-      const hasData = Object.keys(data).length > 0;
-      lastSseEventRef.current = Date.now();
-      console.log(
-        "[SSE] Received initial state",
-        hasData
-          ? `(${Object.keys(data).length} keys)`
-          : "(empty - waiting for data)",
-      );
-      // Reset driver-related state so stale entries from a previous session don't persist.
-      // carDataRef (location) is intentionally NOT cleared: if this is a reconnect mid-session
-      // we keep last known positions so the map doesn't dump everyone to pit lane while
-      // waiting for the next MQTT location batch. processData below will overwrite with
-      // fresh positions as soon as they arrive.
-      setDrivers([]);
-      driverListRef.current = {};
-      timingRef.current = {};
-      maxSegCounts.current = { s1: 6, s2: 6, s3: 6 };
-      sessionFastestLapRef.current = Infinity;
-      sessionFastestDriverRef.current = null;
-      qualifyingPartRef.current = undefined;
-      if (hasData) {
-        processData(data);
-      }
-    });
+    // Frames go in the queue and come out when they are due. Arrival time is
+    // only used to keep the stale-connection watchdog honest — the proxy's own
+    // timestamp, carried in the SSE id, is what the delay is measured against.
+    const receive =
+      (name: StreamEventName) => (message: MessageEvent<string>) => {
+        lastSseEventRef.current = Date.now();
+        const ts = Number(message.lastEventId) || Date.now();
+        serverClockRef.current.sample(ts);
 
-    // Proxy signals a session change — clear all accumulated state
-    eventSource.addEventListener("reset", () => {
-      lastSseEventRef.current = Date.now();
-      console.log("[SSE] Session reset received — clearing state");
-      setDrivers([]);
-      driverListRef.current = {};
-      timingRef.current = {};
-      carDataRef.current = {};
-      maxSegCounts.current = { s1: 6, s2: 6, s3: 6 };
-      sessionFastestLapRef.current = Infinity;
-      sessionFastestDriverRef.current = null;
-      qualifyingPartRef.current = undefined;
-      setRaceControlMessages([]);
-      setTeamRadios([]);
-    });
+        if (name === "initial") {
+          console.log(
+            `[SSE] Received initial state (${(Date.now() - ts) / 1000}s old)`,
+          );
+          // A snapshot replaces the stream it starts, so anything still queued
+          // from before belongs to the old one. And it goes on screen straight
+          // away rather than waiting its turn: the proxy never hands out a
+          // snapshot newer than the delay asked for, so this is the oldest
+          // state available, and holding it back would leave the dashboard
+          // blank while the proxy's window is still filling.
+          queueRef.current.clear();
+          applyFrame({ ts, event: name, raw: message.data });
+          return;
+        }
 
-    eventSource.addEventListener("update", (event) => {
-      const data = JSON.parse(event.data);
-      lastSseEventRef.current = Date.now();
-      processData(data);
-    });
+        queueRef.current.push({ ts, event: name, raw: message.data });
+        drainDueFrames();
+      };
+
+    eventSource.addEventListener("initial", receive("initial"));
+    eventSource.addEventListener("reset", receive("reset"));
+    eventSource.addEventListener("update", receive("update"));
 
     eventSource.onerror = (err) => {
       console.error("[SSE] Error:", err);
@@ -862,7 +980,65 @@ export function useF1DataSSE(): F1DataState {
         connect();
       }
     }, WATCHDOG_CHECK_MS);
-  }, [processData]);
+  }, [applyFrame, drainDueFrames]);
+
+  // The proxy is reachable — open the stream, unless the delay this viewer
+  // wants is still being read, in which case opening it is what the effect
+  // below does as soon as it is known.
+  const startStream = useCallback(() => {
+    if (!readyRef.current) {
+      startWhenReadyRef.current = true;
+      return;
+    }
+    connect();
+  }, [connect]);
+
+  // Queued frames fall due whether or not new ones are arriving, so the queue
+  // is checked on a timer too. 10 Hz matches the proxy's flush cadence, which
+  // keeps a delayed viewer on the same rhythm the data was produced in.
+  useEffect(() => {
+    const interval = setInterval(drainDueFrames, 100);
+    return () => clearInterval(interval);
+  }, [drainDueFrames]);
+
+  // The proxy picks a viewer's starting point from the delay they connect with,
+  // so changing it means reconnecting — which also discards a queue that was
+  // timed against the old setting. While disconnected there is nothing to do:
+  // the next connect reads the current value anyway.
+  useEffect(() => {
+    if (!ready) return;
+    if (startWhenReadyRef.current) {
+      startWhenReadyRef.current = false;
+      connect();
+      return;
+    }
+    if (!isConnectedRef.current) return;
+    if (connectedDelayRef.current === delayMs) return;
+    console.log(`[SSE] Broadcast delay changed to ${delayMs / 1000}s`);
+    connect();
+  }, [ready, delayMs, connect]);
+
+  // Whether the delay asked for is actually in force. The proxy keeps a window
+  // of the stream, not all of it, so for the first minute after it starts the
+  // oldest state it can serve may still be younger than the delay.
+  useEffect(() => {
+    if (delayMs === 0) {
+      setDelaySyncing(false);
+      return;
+    }
+    const check = () => {
+      const applied = lastAppliedTsRef.current;
+      if (applied === null) {
+        setDelaySyncing(false); // nothing on screen to be behind with
+        return;
+      }
+      // The tolerance absorbs the gap between frames and the clock estimate.
+      setDelaySyncing(serverClockRef.current.now() - applied < delayMs - 3000);
+    };
+    check();
+    const interval = setInterval(check, 1000);
+    return () => clearInterval(interval);
+  }, [delayMs]);
 
   // Clock extrapolation — ticks every second
   useEffect(() => {
@@ -883,8 +1059,16 @@ export function useF1DataSSE(): F1DataState {
 
       // Only extrapolate when the clock is running (red flag / session end sets extrapolating=false)
       if (clock.extrapolating !== false) {
+        // Against the same timeline the data is on, not the wall clock: with a
+        // broadcast delay set, Date.now() would run the countdown at the real
+        // time while the table sits a minute behind it. That is the "clock
+        // live, table behind" mismatch the proxy's delta frames were written
+        // to avoid, and a delay would reintroduce it for free.
         const elapsed = Math.floor(
-          (Date.now() - new Date(clock.utc).getTime()) / 1000,
+          (serverClockRef.current.now() -
+            delayMsRef.current -
+            new Date(clock.utc).getTime()) /
+            1000,
         );
         totalSeconds = Math.max(0, totalSeconds - elapsed);
       }
@@ -935,7 +1119,7 @@ export function useF1DataSSE(): F1DataState {
               clearInterval(healthCheckIntervalRef.current);
               healthCheckIntervalRef.current = null;
             }
-            connect();
+            startStream();
           } else {
             throw new Error("Proxy not ok");
           }
@@ -953,7 +1137,7 @@ export function useF1DataSSE(): F1DataState {
                     setError(null);
                     clearInterval(healthCheckIntervalRef.current!);
                     healthCheckIntervalRef.current = null;
-                    connect();
+                    startStream();
                   }
                 })
                 .catch(() => {});
@@ -1020,5 +1204,7 @@ export function useF1DataSSE(): F1DataState {
     error,
     proxyMode,
     signalrDegraded,
+    delaySyncing,
+    streamEpoch,
   };
 }

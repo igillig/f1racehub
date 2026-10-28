@@ -18,12 +18,16 @@ import StatusBanner, { BannerConfig } from "@/components/StatusBanner";
 import ReplayBar from "@/components/ReplayBar";
 import AppDrawer from "@/components/AppDrawer";
 import { useF1DataSSE } from "@/hooks/useF1DataSSE";
+import { useBroadcastDelay } from "@/hooks/useBroadcastDelay";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useTimingSplit } from "@/hooks/useTimingSplit";
 import { sectorCounts } from "@/lib/timingDensity";
 
 export default function DashboardPage() {
   const { t } = useLanguage();
+  // How far behind live this viewer wants to be. It belongs to the browser, so
+  // it is read here and handed to the stream rather than decided inside it.
+  const delay = useBroadcastDelay();
   const {
     drivers,
     sessionInfo,
@@ -35,7 +39,9 @@ export default function DashboardPage() {
     error,
     proxyMode,
     signalrDegraded,
-  } = useF1DataSSE();
+    delaySyncing,
+    streamEpoch,
+  } = useF1DataSSE({ delayMs: delay.delayMs, ready: delay.ready });
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<
@@ -251,6 +257,9 @@ export default function DashboardPage() {
         latestRaceControlMessage={latestRaceControlMessage}
         onBannerComplete={hideBanner}
         onMenuOpen={() => setDrawerOpen((v) => !v)}
+        delaySeconds={delay.seconds}
+        onDelayChange={delay.setSeconds}
+        delaySyncing={delaySyncing}
       />
 
       <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -398,6 +407,7 @@ export default function DashboardPage() {
                                   qualifyingPart={sessionInfo.qualifyingPart}
                                   hoveredDriverNumber={activeNum}
                                   weather={weather}
+                                  streamEpoch={streamEpoch}
                                 />
                               </div>
                               <AnimatePresence>
