@@ -258,6 +258,15 @@ const translations = {
     "delay.less": "Un segundo menos",
     "delay.more": "Un segundo más",
 
+    // Feature tour
+    "tour.delay.title": "Nuevo: sincronizá con tu transmisión",
+    "tour.delay.content":
+      "Este fin de semana (GP de México) estamos probando una función nueva. Atrasá la telemetría con este control para que coincida con lo que ves en la TV.",
+    "tour.next": "Siguiente",
+    "tour.back": "Atrás",
+    "tour.skip": "Saltar",
+    "tour.last": "Listo",
+
     // Landing page
     "landing.nextRace": "Próxima Carrera",
     "landing.startsIn": "Comienza En",
@@ -514,6 +523,15 @@ const translations = {
       "That much history isn't stored yet. It fills in within a few seconds.",
     "delay.less": "One second less",
     "delay.more": "One second more",
+
+    // Feature tour
+    "tour.delay.title": "New: sync with your broadcast",
+    "tour.delay.content":
+      "We're trialling a new feature this weekend (Mexico GP). Hold the telemetry back with this control so it matches what you see on TV.",
+    "tour.next": "Next",
+    "tour.back": "Back",
+    "tour.skip": "Skip",
+    "tour.last": "Done",
 
     // Landing page
     "landing.nextRace": "Next Race",

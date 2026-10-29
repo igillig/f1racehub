@@ -17,6 +17,7 @@ import Footer from "@/components/Footer";
 import StatusBanner, { BannerConfig } from "@/components/StatusBanner";
 import ReplayBar from "@/components/ReplayBar";
 import AppDrawer from "@/components/AppDrawer";
+import FeatureTour from "@/components/FeatureTour";
 import { useF1DataSSE } from "@/hooks/useF1DataSSE";
 import { useBroadcastDelay } from "@/hooks/useBroadcastDelay";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -456,6 +457,7 @@ export default function DashboardPage() {
             : undefined
         }
       />
+      <FeatureTour />
     </div>
   );
 }

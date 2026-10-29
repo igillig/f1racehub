@@ -85,6 +85,7 @@ export default function BroadcastDelayControl({
         title={t("delay.tooltip")}
         aria-label={t("delay.tooltip")}
         aria-expanded={open}
+        data-tour="broadcast-delay"
         className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition-colors ${
           delayed
             ? "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:border-amber-400/70"
