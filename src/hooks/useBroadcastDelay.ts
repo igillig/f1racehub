@@ -3,16 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 
 /**
- * How far behind live this viewer wants the dashboard, in seconds.
+ * How far behind live this viewer wants the dashboard. The dashboard runs
+ * 30–60s ahead of a TV broadcast and the figure depends on the provider, so it
+ * is per-viewer and remembered per browser.
  *
- * The data arrives as fast as the sources produce it, which puts the dashboard
- * 30 to 60 seconds ahead of a TV broadcast. Anyone watching both at once needs
- * to be able to hold it back by their own amount — the figure depends on their
- * provider, so it is theirs to set, and it is remembered per browser.
- *
- * The ceiling matches MAX_DELAY_MS in proxy/stream-buffer.js: the proxy only
- * keeps that much of the stream, and past a minute the dashboard would be
- * behind the broadcast rather than with it.
+ * The ceiling matches MAX_DELAY_MS in proxy/stream-buffer.js — that is all the
+ * stream the proxy keeps.
  */
 export const BROADCAST_DELAY_MAX_S = 60;
 
@@ -34,18 +30,16 @@ export interface BroadcastDelay {
   /** What the stream layer works in. */
   delayMs: number;
   /**
-   * False until the stored preference has been read, which happens right
-   * after mount. Nothing should open the stream before then: connecting live
-   * and correcting a moment later would show this viewer the very seconds
-   * they set a delay to avoid.
+   * False until the stored preference is read. Nothing should open the stream
+   * before then: connecting live and correcting a moment later would show the
+   * very seconds the viewer set a delay to avoid.
    */
   ready: boolean;
   setSeconds: (seconds: number) => void;
 }
 
 export function useBroadcastDelay(): BroadcastDelay {
-  // Live on the first render so the server and the client agree; the stored
-  // preference is applied right after mount.
+  // Live on the first render so server and client agree.
   const [seconds, setStored] = useState(0);
   const [ready, setReady] = useState(false);
 
@@ -54,7 +48,7 @@ export function useBroadcastDelay(): BroadcastDelay {
       const saved = sanitise(window.localStorage.getItem(STORAGE_KEY));
       if (saved !== null) setStored(saved);
     } catch {
-      // Private mode, or blocked site data. Live is a fine default.
+      // Private mode or blocked site data; live is a fine default.
     }
     setReady(true);
   }, []);
@@ -68,7 +62,7 @@ export function useBroadcastDelay(): BroadcastDelay {
     try {
       window.localStorage.setItem(STORAGE_KEY, String(clamped));
     } catch {
-      // Not worth surfacing: the delay still applies for this session.
+      // The delay still applies for this session.
     }
   }, []);
 

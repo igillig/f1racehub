@@ -315,18 +315,10 @@ export async function fetchSeason(
 }
 
 /**
- * `fetchSeason` for a route that Next prerenders at build time.
- *
- * OpenF1 intermittently answers 401 to its *entire* REST API — the lock is not
- * reliably tied to a session being on air, and it outlasts the session — and
- * `docker build` runs outside the compose network, so the proxy that holds the
- * token is unreachable from the builder. `fetchSeason` throwing there failed
- * the whole deploy, which should never hinge on a third party being up.
- *
- * Swallowing the error is not enough on its own: an empty calendar would be
- * baked into the HTML and cached for the whole revalidate window. So the route
- * also opts out of static generation for this render and is served on demand
- * instead — by then the proxy is reachable and the data comes back.
+ * `fetchSeason` for a route prerendered at build time, where OpenF1 may be
+ * locked (401) and the proxy holding the token is unreachable from the builder.
+ * `noStore()` drops the route out of static generation rather than caching an
+ * empty calendar for the whole revalidate window.
  */
 export async function fetchSeasonSafe(
   year: number,

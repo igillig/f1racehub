@@ -1,11 +1,6 @@
-/**
- * Shared state utilities for proxy data sources.
- * Used by mqtt-client.js, live-polling.js, and replay.js.
- */
+// Shared state helpers for mqtt-client.js, live-polling.js and replay.js.
 
-/**
- * Ensure a timing entry exists for a driver. Returns the entry.
- */
+/** Ensure a timing entry exists for a driver. Returns the entry. */
 export function ensureTimingEntry(state, driverNum) {
   if (!state.timing) state.timing = {};
   if (!state.timing[driverNum]) {
@@ -40,10 +35,7 @@ export function ensureTimingEntry(state, driverNum) {
   return state.timing[driverNum];
 }
 
-/**
- * Update best lap for a driver. Only counts completed non-pit-out laps.
- * Returns true if this lap set a new personal best.
- */
+/** Completed non-pit-out laps only. True when it set a personal best. */
 export function updateBestLap(entry, lapDuration, isPitOutLap) {
   if (!lapDuration || isPitOutLap) return false;
   if (!entry.best_lap || lapDuration < entry.best_lap) {
@@ -53,10 +45,7 @@ export function updateBestLap(entry, lapDuration, isPitOutLap) {
   return false;
 }
 
-/**
- * Check if a driver is currently within a pit lane time window.
- * Returns { in_pit, remaining_ms }.
- */
+/** Whether a driver is inside a pit lane time window. */
 export function getPitWindowStatus(pitDate, laneDuration) {
   if (!pitDate || !laneDuration) return { in_pit: false, remaining_ms: 0 };
   const entryMs = new Date(pitDate).getTime();
@@ -68,13 +57,10 @@ export function getPitWindowStatus(pitDate, laneDuration) {
   return { in_pit: false, remaining_ms: 0 };
 }
 
-/**
- * Derive track_status flag from a race control flag string.
- * Returns "GREEN", "YELLOW", "RED", "CHEQUERED", or null.
- */
+/** Race control flag string to track_status, or null if it maps to neither. */
 export function flagToTrackStatus(flag) {
   const f = (flag || "").toUpperCase();
-  // CLEAR means a localised yellow was lifted — track is back to green
+  // CLEAR means a localised yellow was lifted — back to green.
   if (f === "GREEN" || f === "CLEAR") return "GREEN";
   if (f === "YELLOW" || f === "DOUBLE YELLOW") return "YELLOW";
   if (f === "RED") return "RED";
@@ -82,10 +68,7 @@ export function flagToTrackStatus(flag) {
   return null;
 }
 
-/**
- * Detect safety car status from a race control message string.
- * Returns "SC", "VSC", or null.
- */
+/** "SC", "VSC" or null, from a race control message. */
 export function detectSafetyCar(message) {
   if (!message) return null;
   if (message.includes("VIRTUAL SAFETY CAR")) {
@@ -100,16 +83,13 @@ export function detectSafetyCar(message) {
 }
 
 /**
- * Queue a GPS fix for delivery on the next SSE flush.
+ * Queue a GPS fix for the next SSE flush. `state.location[num]` keeps only the
+ * newest fix, and sources publish faster than the proxy flushes (~3.7 Hz vs
+ * 100 ms), so ~45% of the stream was overwritten before leaving the proxy and
+ * the map interpolated across ~800 ms holes.
  *
- * `state.location[num]` is a single slot that keeps only the newest fix, and
- * every source publishes faster than the proxy flushes (OpenF1 is ~3.7 Hz per
- * driver against a 100 ms flush), so roughly 45% of the GPS stream used to be
- * overwritten before it ever left the proxy. The track map was then left with
- * ~800 ms holes to interpolate across and cars moved in stop-and-go.
- *
- * server.js drains these queues after every flush. The cap bounds them for the
- * case where no client is connected and nothing is draining.
+ * server.js drains these after every flush; the cap bounds them when no client
+ * is connected.
  */
 const LOCATION_QUEUE_MAX = 12; // ~3 s at 3.7 Hz
 
@@ -127,18 +107,12 @@ export function queueLocationFix(state, num, x, y, t) {
 }
 
 /**
- * Merge an OpenF1 minisector array into whatever is already in state.
+ * Merge an OpenF1 minisector array into state rather than replacing it.
  *
- * OpenF1 leaves holes in these arrays, and always in the same slot: the first
- * minisector of sector 1 arrives as `null`. Measured over the archived
- * Singapore sprint, 188 of 316 lap rows had it, and across every archived
- * session `null` never appeared at any other index of any sector.
- *
- * Copying the array wholesale therefore blanked that one bar — and it stayed
- * blank, because the official feed does not reset segment 0 of sector 1 at the
- * start/finish line the way it resets the rest, so nothing wrote over the hole
- * afterwards. A hole means "no news for this slot", not "not driven yet": keep
- * what is there, and use 0 (unknown) only when nothing is.
+ * OpenF1 sends `null` for the first minisector of sector 1 (188 of 316 rows in
+ * the archived Singapore sprint; never at any other index). Copying wholesale
+ * blanked that bar permanently, since the official feed never resets segment 0
+ * of sector 1 at the line. A hole means "no news", not "not driven".
  */
 export function mergeSegments(existing, incoming) {
   if (!Array.isArray(incoming) || incoming.length === 0) return existing;
@@ -156,12 +130,9 @@ export function mergeSegments(existing, incoming) {
 }
 
 /**
- * Reset sector 1's minisectors for a new lap, keeping the first one.
- *
- * Everything else about a new lap is genuinely undriven, but the car is already
- * inside the first minisector of sector 1 when it crosses the line — the
- * official feed never sends a Status 0 reset for it, only for the ones behind
- * it. Returns an array of the same length so the bar count does not flicker.
+ * Reset sector 1 for a new lap, keeping segment 0: the car is already inside it
+ * at the line, and the feed never sends a Status 0 reset for that one. Same
+ * length out, so the bar count does not flicker.
  */
 export function keepFirstSegment(segments) {
   if (!Array.isArray(segments) || segments.length === 0) return [];

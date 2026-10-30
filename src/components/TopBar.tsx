@@ -120,7 +120,7 @@ export default function TopBar({
   return (
     <header className="w-full border-b border-zinc-800 bg-zinc-950">
       <div className="flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 gap-2 sm:gap-4">
-        {/* Left side - Hamburger + Logo + session */}
+        {/* Left side — yields width so the delay pill is not pushed off a phone */}
         <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           {/* Hamburger */}
           <button
@@ -174,7 +174,6 @@ export default function TopBar({
                   ? t("session.noActive")
                   : session.name || t("session.noActive")}
               </span>
-              {/* Mobile: lap counter or remaining time stacked below city name */}
               <span className="sm:hidden truncate text-zinc-300 text-xs font-bold tabular-nums">
                 {isRace && session.currentLap > 0
                   ? `${t("topbar.laps")} ${String(session.currentLap).padStart(2, "0")}${session.totalLaps > 0 ? ` / ${session.totalLaps}` : ""}`

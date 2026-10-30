@@ -1,15 +1,10 @@
 /**
- * Frames that have arrived but are not allowed on screen yet.
+ * Frames that arrived but are not due yet: each waits until the proxy's clock
+ * passes its timestamp plus the viewer's delay. Arrival order is send order,
+ * since SSE runs over TCP.
  *
- * Someone watching the race on TV sets a delay, and from then on every frame
- * waits here until the proxy's clock has moved past its timestamp plus that
- * delay. Order is arrival order: SSE runs over TCP, so what the proxy sent
- * first is what arrived first.
- *
- * The raw JSON text is kept rather than the parsed object. A minute of a race
- * is a few hundred frames, and parsing on arrival would both do the work twice
- * over — once here, once when the frame is applied — and hold every
- * intermediate object in memory for the length of the delay.
+ * Raw JSON is kept rather than the parsed object — parsing on arrival would do
+ * the work twice and hold every intermediate object for the length of the delay.
  */
 
 export type StreamEventName = "initial" | "update" | "reset";

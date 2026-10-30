@@ -12,28 +12,18 @@ import {
 /** The map panel never gets narrower than this, however far the divider goes. */
 const MIN_MAP_WIDTH = 280;
 
-/**
- * The table's share of the row before anyone touches the divider.
- *
- * A share rather than the table's own full width: on a wide monitor the full
- * table leaves the map far more room than the table, and on a laptop it leaves
- * it almost none. Sixty per cent keeps the same balance at either size, and the
- * surplus over what the current density level needs goes into the minisector
- * columns rather than sitting empty.
- */
+/** A share, not the table's full width: that balance holds on a laptop and a
+ *  wide monitor alike, and the surplus goes into the minisector columns. */
 const DEFAULT_TABLE_SHARE = 0.6;
 
 const STORAGE_KEY = "f1-dashboard-timing-width";
 
 interface Split {
   /**
-     * Ref for the flex row that holds the table, the divider and the map.
-     *
-     * A callback ref, not an object ref: the dashboard renders a loading screen
-     * before the first SSE frame arrives, so the row does not exist on mount
-     * and an effect with an empty dependency list would observe nothing and
-     * never run again.
-     */
+   * Callback ref, not an object ref: the dashboard shows a loading screen until
+   * the first SSE frame, so the row does not exist on mount and a one-shot
+   * effect would observe nothing.
+   */
   containerRef: (node: HTMLDivElement | null) => void;
   /** Explicit table width, or null until the container has been measured. */
   width: number | null;
@@ -47,22 +37,17 @@ interface Split {
 }
 
 /**
- * The draggable split between the timing table and the map.
- *
- * The width lives here rather than in CSS because it has to be clamped against
- * two moving targets — the table's own minimum, which depends on the circuit's
- * minisector count, and the map's minimum — and because the density level is
- * derived from it. Persisted per browser: someone who set up their split for a
- * 34" monitor should not have to redo it every session.
- *
- * Desktop only. The mobile layout stacks the two and has its own toggle.
+ * The draggable split between the timing table and the map. Not CSS: the width
+ * is clamped against two moving targets (the table's minimum, which follows the
+ * circuit's minisector count, and the map's) and the density level derives from
+ * it. Persisted per browser. Desktop only — mobile stacks the two.
  */
 export function useTimingSplit(counts: SectorCounts): Split {
   const [width, setWidth] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  // Measured on the client only: reading localStorage or the container during
-  // render would not match what the server rendered.
+  // Client-only: reading storage or the container during render would not
+  // match what the server rendered.
   const [available, setAvailable] = useState<number | null>(null);
 
   const observerRef = useRef<ResizeObserver | null>(null);
@@ -82,16 +67,15 @@ export function useTimingSplit(counts: SectorCounts): Split {
   const clamp = useCallback(
     (value: number, containerWidth: number) => {
       const min = minTableWidth(counts);
-      // On a narrow window the map's minimum wins, even if that pushes the
-      // table below its own floor — the table can scroll, the map cannot.
+      // The map's minimum wins on a narrow window: the table can scroll, the
+      // map cannot.
       const max = Math.max(min, containerWidth - MIN_MAP_WIDTH);
       return Math.min(Math.max(value, min), max);
     },
     [counts],
   );
 
-  // First measurement: the stored width if there is one, otherwise the default
-  // share.
+  // First measurement: the stored width, else the default share.
   useEffect(() => {
     if (available === null || width !== null) return;
 
@@ -103,7 +87,7 @@ export function useTimingSplit(counts: SectorCounts): Split {
         if (Number.isFinite(parsed)) stored = parsed;
       }
     } catch {
-      // Private mode, or site data blocked. The default is fine.
+      // Private mode, or site data blocked.
     }
 
     setWidth(clamp(stored ?? available * DEFAULT_TABLE_SHARE, available));
@@ -127,9 +111,8 @@ export function useTimingSplit(counts: SectorCounts): Split {
 
       setDragging(true);
 
-      // Throttled to one update per frame. A raw pointermove fires faster than
-      // the browser paints, and every update re-renders twenty timing rows on
-      // top of whatever the SSE stream is already pushing.
+      // One update per frame: pointermove outruns paint, and each update
+      // re-renders twenty rows on top of what the SSE stream is pushing.
       let frame = 0;
       const move = (e: PointerEvent) => {
         const next = clamp(startWidth + (e.clientX - startX), container);
@@ -148,7 +131,7 @@ export function useTimingSplit(counts: SectorCounts): Split {
         try {
           window.localStorage.setItem(STORAGE_KEY, String(final));
         } catch {
-          // Not worth surfacing: the split still works for this session.
+          // The split still works for this session.
         }
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);

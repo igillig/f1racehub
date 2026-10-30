@@ -27,15 +27,9 @@ interface Params {
 }
 
 /**
- * Prerender the whole current season at build time; later years render on
- * demand.
- *
- * A failed read here used to abort the entire build ("Failed to collect page
- * data for /gp/[slug]"), which made every deploy depend on OpenF1 answering.
- * It does not always: the REST API locks to 401 at times that have nothing to
- * do with a session being on air, and the builder cannot reach the proxy that
- * holds the token. So prerendering is now best-effort — with no params every
- * GP page is served on demand and cached by ISR from there.
+ * Prerender the current season; later years render on demand. Best-effort: a
+ * failed read here used to abort the whole build, so with no params every GP
+ * page is served on demand and cached by ISR instead.
  */
 export async function generateStaticParams() {
   try {

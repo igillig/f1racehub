@@ -1,42 +1,24 @@
 /**
- * Rolling window of the SSE frames this proxy has already broadcast.
+ * Rolling window of the SSE frames this proxy has broadcast: every delta plus a
+ * full snapshot every few seconds.
  *
- * Viewers who watch the race on TV want the dashboard a few seconds behind
- * live. The delay itself belongs in the browser — it holds each frame back and
- * applies it late — but a viewer who opens the page mid-session has to start
- * from somewhere, and `currentState` is the present: handing that over would
- * show them the next minute of the race before the delay even takes effect.
+ * A viewer running behind live needs a starting point, and `currentState` is
+ * the present — handing that over would spoil the next minute. Instead they get
+ * the newest snapshot already older than their delay, plus every frame since.
+ * Frames are stored as serialised SSE text so replaying them is a byte copy.
  *
- * So the proxy keeps what it put on the wire: every delta frame, plus a full
- * snapshot every few seconds. A delayed viewer is served the newest snapshot
- * that is already older than their delay, followed by every frame recorded
- * after it. That lands them exactly where a viewer connected all along would
- * be, with the rest of the window queued in their browser.
- *
- * Frames are stored as the serialised SSE text, so replaying them is a byte
- * copy rather than a second pass of JSON.stringify.
- *
- * The buffer records whether or not anyone is connected. It costs one extra
- * reference to each frame and it is what makes the *first* viewer's page load
- * spoiler-free — on a dashboard with one viewer, that is every page load.
+ * Recording happens with or without clients connected; that is what makes the
+ * first viewer's page load spoiler-free.
  */
 
 /** Deepest delay a viewer may ask for. The UI offers the same ceiling. */
 export const MAX_DELAY_MS = 60_000;
 
-/**
- * How often a full snapshot is taken. It bounds both the extra memory (one
- * copy of the state per snapshot) and how many frames a delayed viewer has to
- * be sent on top of their starting point.
- */
+/** Bounds both the extra memory and the replay a delayed viewer is sent. */
 const SNAPSHOT_INTERVAL_MS = 10_000;
 
-/**
- * Hard ceiling on the window. Measured frames are small (a quali session
- * averages well under 30 KB/s of deltas), so this is a backstop against a
- * pathological session, not the normal operating point. Hitting it costs
- * coverage from the oldest end, never correctness.
- */
+/** Backstop against a pathological session; hitting it costs the oldest
+ *  coverage, never correctness. */
 const MAX_BYTES = 8 * 1024 * 1024;
 
 export function createStreamBuffer({
@@ -44,12 +26,8 @@ export function createStreamBuffer({
   snapshotIntervalMs = SNAPSHOT_INTERVAL_MS,
   maxBytes = MAX_BYTES,
 } = {}) {
-  // Delta frames in broadcast order, and the snapshots they hang off.
-  // `seq` is what the two are stitched together by: a snapshot records the
-  // sequence number of the last frame already folded into it, so replaying
-  // means "this snapshot, then every frame with a higher seq". Timestamps
-  // alone would be ambiguous — a control event can share a millisecond with
-  // the frame next to it.
+  // Stitched by `seq`, not timestamps: a control event can share a millisecond
+  // with the frame next to it. A snapshot records the last seq folded into it.
   const frames = [];
   const snapshots = [];
   let seq = 0;
@@ -60,15 +38,11 @@ export function createStreamBuffer({
     if (entry) bytes -= entry.frame.length;
   }
 
-  /**
-   * One snapshot plus the frames recorded after it is the smallest unit that
-   * can be dropped without breaking the chain a replay walks, so shrinking the
-   * buffer always means giving up its oldest segment.
-   */
+  /** A snapshot plus the frames after it is the smallest unit droppable
+   *  without breaking the chain a replay walks. */
   function dropOldestSegment() {
     if (snapshots.length === 0) {
-      // Before the first snapshot exists the frames have no base to be
-      // replayed onto, so they can go one by one.
+      // No base to replay onto yet, so frames can go one by one.
       release(frames.shift());
       return;
     }
@@ -78,13 +52,9 @@ export function createStreamBuffer({
   }
 
   function prune(now) {
-    // A snapshot is only ever a starting point while it is older than the delay
-    // asked for. Once it is older than the deepest delay — regardless of whether
-    // the snapshot after it is already old enough — it can never be chosen
-    // again, so it is dead weight. Comparing against the oldest (not the
-    // second-oldest) is what also keeps a snapshot recorded before a long idle
-    // stretch from lingering and being handed to a delayed viewer as if it were
-    // seconds old.
+    // Past the deepest delay a snapshot can never be chosen again. Comparing
+    // against the oldest also stops one recorded before a long idle stretch
+    // from being handed over as if it were seconds old.
     while (
       snapshots.length > 1 &&
       snapshots[0].ts < now - maxDelayMs - snapshotIntervalMs
@@ -95,9 +65,7 @@ export function createStreamBuffer({
       const floor = now - maxDelayMs - snapshotIntervalMs;
       while (frames.length > 0 && frames[0].ts < floor) release(frames.shift());
     }
-    // Never drop the last snapshot: it is the only base a delayed viewer has to
-    // replay onto. Frames go first, and a lone snapshot larger than the cap is
-    // kept rather than leaving the buffer with nothing to start from.
+    // Never drop the last snapshot: it is the only base left to replay onto.
     while (bytes > maxBytes) {
       if (snapshots.length > 1) dropOldestSegment();
       else if (frames.length > 0) release(frames.shift());
@@ -119,11 +87,8 @@ export function createStreamBuffer({
       return ts - lastSnapshotTs >= snapshotIntervalMs;
     },
 
-    /**
-     * Record a full-state snapshot. Must be called after the frame for the
-     * same timestamp has been recorded, so the snapshot and the frames that
-     * follow it do not overlap.
-     */
+    /** Must follow the frame for the same timestamp, so snapshot and frames
+     *  do not overlap. */
     recordSnapshot(frame, ts) {
       lastSnapshotTs = ts;
       snapshots.push({ seq, ts, frame });
@@ -131,11 +96,8 @@ export function createStreamBuffer({
       prune(ts);
     },
 
-    /**
-     * What to send a viewer joining `delayMs` behind live: a starting state and
-     * the frames recorded since. Null when there is nothing stored yet, which
-     * leaves the caller to serve the live state.
-     */
+    /** Starting state plus the frames since, for a viewer joining `delayMs`
+     *  behind live. Null when nothing is stored and the caller serves live. */
     backlogFor(delayMs, now = Date.now()) {
       const cutoff = now - delayMs;
       let base = null;
@@ -143,11 +105,8 @@ export function createStreamBuffer({
         if (snapshot.ts > cutoff) break;
         base = snapshot;
       }
-      // Nothing old enough yet — the proxy has been up for less than the delay
-      // asked for. Start from the oldest snapshot there is: it is newer than
-      // the viewer wanted, so their browser will sit on it until the window
-      // fills, which is the harmless direction to be wrong in. The other way
-      // round would mean showing them data from the future.
+      // Nothing old enough yet: start from the oldest there is. Too new means
+      // the browser waits for the window to fill; too old would show the future.
       if (!base) base = snapshots[0] ?? null;
       if (!base) return null;
 

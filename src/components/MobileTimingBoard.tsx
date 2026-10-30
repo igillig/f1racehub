@@ -40,13 +40,11 @@ const SECTOR_TEXT: Record<SectorStatus, string> = {
 /** Session label row plus the column header row, both sticky at the card top. */
 const HEADER_BLOCK_H = 52;
 
-/**
- * Best-lap column. Hidden under 390px, where the gap column needs every pixel
- * it can get — those phones read the best lap in the expanded panel instead.
- */
+/** Hidden under 390px, where the gap column needs the room; the expanded panel
+ * carries the best lap on those phones instead. */
 const BEST_LAP_COL = "hidden min-[390px]:block w-[56px] flex-shrink-0 text-right pr-1.5";
 
-/** "1:23.456" → ms. Infinity when the driver has no time yet. */
+/** "1:23.456" → ms; Infinity when there is no time yet. */
 function lapTimeToMs(lapTime?: string): number {
   if (!lapTime || lapTime === "---") return Infinity;
   const parts = lapTime.split(/[:.]/).map(Number);
@@ -107,7 +105,6 @@ function DriverRowMobile({
   eliminationCutoff: number | null;
   isExpanded: boolean;
   isPinned: boolean;
-  /** True when this driver holds the session's fastest lap. */
   hasFastestLap: boolean;
   gapPrimary: GapPrimary;
   /** True for the copy docked to an edge, so it does not claim to be the row. */
@@ -209,12 +206,10 @@ function DriverRowMobile({
           {gapText}
         </span>
 
-        {/* Best lap */}
         <span className={cn(BEST_LAP_COL, "text-[10px] font-mono tabular-nums", bestLapColor)}>
           {driver.bestLap || "–:–-.–––"}
         </span>
 
-        {/* Last lap */}
         <span className={cn("w-[64px] flex-shrink-0 text-right text-xs font-mono tabular-nums", lastLapColor)}>
           {driver.lastLap || "–:–-.–––"}
         </span>
@@ -344,7 +339,7 @@ export default function MobileTimingBoard({
     return active - 6 + 1;
   })();
 
-  // Purple on whoever holds the session's fastest lap, as on the broadcast.
+  // Purple on the session's fastest lap, as on the broadcast.
   const fastestLapMs = drivers.reduce(
     (best, d) => Math.min(best, lapTimeToMs(d.bestLap)),
     Infinity,

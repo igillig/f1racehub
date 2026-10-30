@@ -1,23 +1,9 @@
-// How much the timing table gives up as it is narrowed, and how narrow it is
-// allowed to get.
+// What the timing table gives up as the split divider narrows it, in order:
+// thinner minisector bars, a compressed driver column, no PIT column, no tire
+// column. Level 4 is the floor, so the drag never clips content.
 //
-// The table is the constraint in the dashboard split: the map is an SVG with a
-// viewBox, so it takes any size, while the table has five fixed columns and
-// three minisector columns whose width is driven by the circuit's segment
-// count. Dragging the divider is only useful if the table has a defined way to
-// shed width, so it sheds it in this order:
-//
-//   1. the minisector bars get thinner
-//   2. the driver column is compressed
-//   3. the PIT column disappears
-//   4. the tire column disappears
-//
-// Level 4 is the floor. The divider cannot go past it, so the table is never
-// narrower than its own content — nothing is ever clipped or scrolled away by
-// the drag itself.
-//
-// Both TimingBoard (the header) and DriverRow (every row) build their grid
-// from here, so the two can never drift out of alignment.
+// TimingBoard (header) and DriverRow (rows) both build their grid from here so
+// the two cannot drift out of alignment.
 
 export const DENSITY_LEVELS = [0, 1, 2, 3, 4] as const;
 
@@ -76,14 +62,8 @@ export function segmentWidth(level: Density): number {
   return DENSITY[level].bar + SEGMENT_GAP;
 }
 
-/**
- * How wide a minisector bar may stretch when the table has room to spare.
- *
- * The sector columns are `1fr`, so a table wider than its level needs hands
- * them the surplus. Without a stretch the bars would stay their nominal width
- * and sit in the middle of an increasingly empty column. The cap keeps them
- * reading as a row of segments rather than a set of blocks.
- */
+/** Cap on bar stretch: the `1fr` sector columns hand over any surplus, and
+ *  without a limit the bars read as blocks rather than segments. */
 export function maxBarWidth(level: Density): number {
   return DENSITY[level].bar + 10;
 }
@@ -104,13 +84,8 @@ function columnWidths(level: Density, counts: SectorCounts): number[] {
   ];
 }
 
-/**
- * `grid-template-columns` for a level.
- *
- * The minisector columns are `minmax(Npx, 1fr)` rather than a fixed width so
- * that widening the table past level 0 spreads the surplus across them instead
- * of leaving a gap on the right.
- */
+/** `grid-template-columns` for a level. Minisectors are `minmax(Npx, 1fr)` so
+ *  width past level 0 spreads across them instead of gapping on the right. */
 export function gridColumns(level: Density, counts: SectorCounts): string {
   const { driver, pit, tire } = DENSITY[level];
   const segment = segmentWidth(level);

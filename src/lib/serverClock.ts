@@ -1,16 +1,10 @@
 /**
- * The proxy's clock, as closely as this browser can estimate it.
+ * The proxy's clock, estimated from the send time on each SSE frame — a browser
+ * clock can sit seconds off, enough to turn a 45s delay into 40 or 50.
  *
- * Every SSE frame carries the time the proxy sent it (the `id:` field). To run
- * the stream a fixed amount behind live we compare those stamps against "now",
- * and a browser clock can sit seconds away from the proxy's — enough to turn a
- * 45s delay into 40 or 50 without anyone noticing.
- *
- * Each frame gives one sample of `local - server`. The true offset is the
- * smallest of them: a sample is inflated by however long the frame spent in
- * flight, never deflated, so the minimum is the closest estimate available.
- * Samples expire, so a clock correction on either end is picked up instead of
- * being outvoted forever by one lucky early sample.
+ * The offset is the *minimum* of recent `local - server` samples: flight time
+ * inflates a sample, never deflates it. Samples expire so a clock correction is
+ * picked up rather than outvoted forever by one lucky early sample.
  */
 
 /** How long a sample stays in the estimate. */
@@ -36,9 +30,7 @@ export function createServerClock(): ServerClock {
       const at = Date.now();
       offsets.push(at - serverTs);
       takenAt.push(at);
-      // A backlog replayed on connect arrives with timestamps up to a minute
-      // old, so it contributes wildly inflated samples. They are harmless —
-      // the minimum ignores them — but they should not linger.
+      // A backlog replayed on connect contributes wildly inflated samples.
       while (takenAt.length > 0 && at - takenAt[0] > SAMPLE_TTL_MS) {
         takenAt.shift();
         offsets.shift();
