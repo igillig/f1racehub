@@ -1,5 +1,5 @@
 import type { MetadataRoute } from "next";
-import { currentSeasonYear, fetchSeason } from "@/lib/calendar";
+import { currentSeasonYear, fetchSeasonSafe } from "@/lib/calendar";
 import { siteUrl } from "@/lib/site";
 
 // Regenerated alongside the calendar pages so new rounds appear without a
@@ -39,7 +39,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // One entry per Grand Prix. A round that hasn't run yet changes more often
   // (schedules get confirmed late); past ones are effectively frozen.
   const year = await currentSeasonYear();
-  const season = await fetchSeason(year);
+  const season = await fetchSeasonSafe(year);
   const rounds: MetadataRoute.Sitemap = season.map((m) => {
     const finished = new Date(m.dateEnd).getTime() < now.getTime();
     return {

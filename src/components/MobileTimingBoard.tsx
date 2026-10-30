@@ -44,7 +44,7 @@ const HEADER_BLOCK_H = 52;
  * Best-lap column. Hidden under 390px, where the gap column needs every pixel
  * it can get — those phones read the best lap in the expanded panel instead.
  */
-const BEST_LAP_COL = "hidden min-[390px]:block w-[62px] flex-shrink-0 text-right pr-1.5";
+const BEST_LAP_COL = "hidden min-[390px]:block w-[56px] flex-shrink-0 text-right pr-1.5";
 
 /** "1:23.456" → ms. Infinity when the driver has no time yet. */
 function lapTimeToMs(lapTime?: string): number {
@@ -210,12 +210,12 @@ function DriverRowMobile({
         </span>
 
         {/* Best lap */}
-        <span className={cn(BEST_LAP_COL, "text-[11px] font-mono tabular-nums", bestLapColor)}>
+        <span className={cn(BEST_LAP_COL, "text-[10px] font-mono tabular-nums", bestLapColor)}>
           {driver.bestLap || "–:–-.–––"}
         </span>
 
         {/* Last lap */}
-        <span className={cn("w-[68px] flex-shrink-0 text-right text-xs font-mono tabular-nums", lastLapColor)}>
+        <span className={cn("w-[64px] flex-shrink-0 text-right text-xs font-mono tabular-nums", lastLapColor)}>
           {driver.lastLap || "–:–-.–––"}
         </span>
 
@@ -492,7 +492,7 @@ export default function MobileTimingBoard({
         <span className={cn(BEST_LAP_COL, "text-[10px] tracking-widest text-zinc-600 uppercase whitespace-nowrap overflow-hidden")}>
           {t("timing.bestLap")}
         </span>
-        <span className="w-[68px] flex-shrink-0 text-right text-[10px] tracking-widest text-zinc-600 uppercase whitespace-nowrap overflow-hidden">
+        <span className="w-[64px] flex-shrink-0 text-right text-[10px] tracking-widest text-zinc-600 uppercase whitespace-nowrap overflow-hidden">
           {t("timing.lastLapShort")}
         </span>
         <span className="w-4 flex-shrink-0" />

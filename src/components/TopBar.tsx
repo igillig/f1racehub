@@ -121,7 +121,7 @@ export default function TopBar({
     <header className="w-full border-b border-zinc-800 bg-zinc-950">
       <div className="flex items-center justify-between px-2 sm:px-4 py-2 sm:py-3 gap-2 sm:gap-4">
         {/* Left side - Hamburger + Logo + session */}
-        <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           {/* Hamburger */}
           <button
             onClick={onMenuOpen}
@@ -175,7 +175,7 @@ export default function TopBar({
                   : session.name || t("session.noActive")}
               </span>
               {/* Mobile: lap counter or remaining time stacked below city name */}
-              <span className="sm:hidden text-zinc-300 text-xs font-bold tabular-nums">
+              <span className="sm:hidden truncate text-zinc-300 text-xs font-bold tabular-nums">
                 {isRace && session.currentLap > 0
                   ? `${t("topbar.laps")} ${String(session.currentLap).padStart(2, "0")}${session.totalLaps > 0 ? ` / ${session.totalLaps}` : ""}`
                   : !isRace && session.remainingTime
@@ -279,7 +279,7 @@ export default function TopBar({
           {(trackStatus.message || "").toUpperCase() === "CHEQUERED" ? (
             <div
               className="relative flex items-center justify-center sm:!w-[190px] sm:!h-[50px]"
-              style={{ width: 120, height: 30 }}
+              style={{ width: 104, height: 28 }}
               title={statusInfo.name}
             >
               <div
@@ -301,7 +301,7 @@ export default function TopBar({
           ) : (
             <div
               className="relative flex items-center justify-center sm:!w-[190px] sm:!h-[50px]"
-              style={{ width: 120, height: 30 }}
+              style={{ width: 104, height: 28 }}
               title={statusInfo.name}
             >
               {/* Flag SVG as background, shown complete */}

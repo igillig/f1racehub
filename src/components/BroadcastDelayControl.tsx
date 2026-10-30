@@ -86,24 +86,24 @@ export default function BroadcastDelayControl({
         aria-label={t("delay.tooltip")}
         aria-expanded={open}
         data-tour="broadcast-delay"
-        className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 transition-colors ${
+        className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 transition-colors sm:gap-1.5 sm:px-2 sm:py-1.5 ${
           delayed
             ? "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:border-amber-400/70"
             : "border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:border-zinc-500 hover:text-white"
         }`}
       >
         {delayed ? (
-          <History size={16} className="shrink-0" />
+          <History className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
         ) : (
-          <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500 sm:h-2 sm:w-2" />
         )}
-        <span className="text-sm font-medium tabular-nums">
+        <span className="whitespace-nowrap text-xs font-medium tabular-nums sm:text-sm">
           {delayed ? `−${draft}s` : t("delay.live")}
         </span>
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 z-30 mt-1 w-60 rounded-lg border border-zinc-800 bg-zinc-950/95 p-3 shadow-xl backdrop-blur-sm">
+        <div className="absolute top-full right-0 z-30 mt-1 w-60 max-w-[calc(100vw-1rem)] rounded-lg border border-zinc-800 bg-zinc-950/95 p-3 shadow-xl backdrop-blur-sm">
           <span className="mb-2.5 block text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
             {t("delay.title")}
           </span>

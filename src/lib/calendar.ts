@@ -1,6 +1,8 @@
 // Season calendar and per-Grand-Prix session schedules, read from OpenF1 on
 // the server so /calendario and /gp/[slug] ship real content in their HTML.
 
+import { unstable_noStore as noStore } from "next/cache";
+
 export type Locale = "es" | "en";
 
 export interface SessionSlot {
@@ -182,9 +184,17 @@ async function viaProxy<T>(path: string): Promise<T | null> {
   try {
     const r = await fetch(`${proxyBase()}/${path}`, cacheOpts);
     if (r.status === 404) return [] as unknown as T;
-    if (!r.ok) return null;
+    if (!r.ok) {
+      console.warn(`[calendar] proxy ${r.status} on ${path}`);
+      return null;
+    }
     return (await r.json()) as T;
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[calendar] proxy unreachable on ${path} (${
+        err instanceof Error ? err.message : err
+      })`,
+    );
     return null;
   }
 }
@@ -219,6 +229,7 @@ async function openf1<T>(path: string, attempts = 4): Promise<T | null> {
       // live session. Retrying is pointless — the lock outlasts any backoff —
       // so go straight to the proxy and remember to start there.
       if (r.status === 401 || r.status === 403) {
+        console.warn(`[calendar] OpenF1 ${r.status} on ${path} — trying proxy`);
         proxyPinnedUntil = Date.now() + PROXY_PIN_MS;
         return viaProxy<T>(path);
       }
@@ -231,12 +242,18 @@ async function openf1<T>(path: string, attempts = 4): Promise<T | null> {
           continue;
         }
       }
+      console.warn(`[calendar] OpenF1 ${r.status} on ${path} — trying proxy`);
       return viaProxy<T>(path);
-    } catch {
+    } catch (err) {
       if (attempt < attempts - 1) {
         await sleep(900 * (attempt + 1) + Math.random() * 400);
         continue;
       }
+      console.warn(
+        `[calendar] OpenF1 unreachable on ${path} (${
+          err instanceof Error ? err.message : err
+        }) — trying proxy`,
+      );
       return viaProxy<T>(path);
     }
   }
@@ -295,6 +312,32 @@ export async function fetchSeason(
   return Array.from(bySlug.values()).sort((a, b) =>
     a.dateStart < b.dateStart ? -1 : 1,
   );
+}
+
+/**
+ * `fetchSeason` for a route that Next prerenders at build time.
+ *
+ * OpenF1 intermittently answers 401 to its *entire* REST API — the lock is not
+ * reliably tied to a session being on air, and it outlasts the session — and
+ * `docker build` runs outside the compose network, so the proxy that holds the
+ * token is unreachable from the builder. `fetchSeason` throwing there failed
+ * the whole deploy, which should never hinge on a third party being up.
+ *
+ * Swallowing the error is not enough on its own: an empty calendar would be
+ * baked into the HTML and cached for the whole revalidate window. So the route
+ * also opts out of static generation for this render and is served on demand
+ * instead — by then the proxy is reachable and the data comes back.
+ */
+export async function fetchSeasonSafe(
+  year: number,
+  locale: Locale = "es",
+): Promise<Meeting[]> {
+  try {
+    return await fetchSeason(year, locale);
+  } catch {
+    noStore();
+    return [];
+  }
 }
 
 /** The season currently in progress, per OpenF1's own `latest` pointer. */

@@ -5,7 +5,7 @@ import ViewerTime from "@/components/ViewerTime";
 import {
   CALENDAR_REVALIDATE,
   currentSeasonYear,
-  fetchSeason,
+  fetchSeasonSafe,
   formatInTrackTime,
   type Meeting,
 } from "@/lib/calendar";
@@ -149,7 +149,7 @@ function RoundCard({
 
 export default async function CalendarioPage() {
   const year = await currentSeasonYear();
-  const meetings = await fetchSeason(year, "es");
+  const meetings = await fetchSeasonSafe(year, "es");
 
   const now = Date.now();
   const nextIndex = meetings.findIndex(
