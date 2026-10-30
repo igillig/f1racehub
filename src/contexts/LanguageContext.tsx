@@ -36,6 +36,7 @@ const translations = {
     "timing.s3": "S3",
     "timing.waiting": "Esperando datos de pilotos...",
     "timing.lastLap": "Últ. Vuelta",
+    "timing.bestLap": "Mejor",
     "timing.waitingData": "Esperando datos...",
     "driver.lastLap": "Última Vuelta",
 
@@ -305,6 +306,7 @@ const translations = {
     "timing.s3": "S3",
     "timing.waiting": "Waiting for driver data...",
     "timing.lastLap": "Last Lap",
+    "timing.bestLap": "Best",
     "timing.waitingData": "Waiting for data...",
     "driver.lastLap": "Last Lap",
 

@@ -40,6 +40,22 @@ const SECTOR_TEXT: Record<SectorStatus, string> = {
 /** Session label row plus the column header row, both sticky at the card top. */
 const HEADER_BLOCK_H = 52;
 
+/**
+ * Best-lap column. Hidden under 390px, where the gap column needs every pixel
+ * it can get — those phones read the best lap in the expanded panel instead.
+ */
+const BEST_LAP_COL = "hidden min-[390px]:block w-[62px] flex-shrink-0 text-right pr-1.5";
+
+/** "1:23.456" → ms. Infinity when the driver has no time yet. */
+function lapTimeToMs(lapTime?: string): number {
+  if (!lapTime || lapTime === "---") return Infinity;
+  const parts = lapTime.split(/[:.]/).map(Number);
+  if (parts.some(Number.isNaN)) return Infinity;
+  if (parts.length === 3) return parts[0] * 60000 + parts[1] * 1000 + parts[2];
+  if (parts.length === 2) return parts[0] * 1000 + parts[1];
+  return Infinity;
+}
+
 const TIRE_IMAGES: Record<string, string> = {
   soft:         "/images/tires/soft.svg",
   medium:       "/images/tires/medium.svg",
@@ -81,6 +97,7 @@ function DriverRowMobile({
   eliminationCutoff,
   isExpanded,
   isPinned,
+  hasFastestLap,
   gapPrimary,
   docked = false,
   onToggle,
@@ -90,6 +107,8 @@ function DriverRowMobile({
   eliminationCutoff: number | null;
   isExpanded: boolean;
   isPinned: boolean;
+  /** True when this driver holds the session's fastest lap. */
+  hasFastestLap: boolean;
   gapPrimary: GapPrimary;
   /** True for the copy docked to an edge, so it does not claim to be the row. */
   docked?: boolean;
@@ -107,6 +126,8 @@ function DriverRowMobile({
     driver.lastLapOverallFastest ? SECTOR_TEXT.purple
     : driver.lastLapPersonalBest ? SECTOR_TEXT.green
     : "text-zinc-400";
+
+  const bestLapColor = hasFastestLap ? SECTOR_TEXT.purple : "text-zinc-500";
 
   // Interval = gap to the car ahead, gap = gap to P1. Same as desktop.
   const gapText =
@@ -148,7 +169,7 @@ function DriverRowMobile({
         </span>
 
         {/* Driver badge */}
-        <div className="w-14 flex-shrink-0 flex justify-center mx-1">
+        <div className="w-12 flex-shrink-0 flex justify-center mx-1">
           <div
             className="px-1.5 py-0.5 rounded text-xs font-black text-white w-full text-center"
             style={{
@@ -161,13 +182,13 @@ function DriverRowMobile({
         </div>
 
         {/* Tire + age */}
-        <div className="w-12 flex-shrink-0 flex items-center gap-1 mx-1">
+        <div className="w-11 flex-shrink-0 flex items-center gap-1 mx-1">
           <img src={tireSrc} alt={tireKey} className="w-5 h-5 flex-shrink-0" />
           <span className="text-[11px] text-zinc-500 font-mono tabular-nums">{driver.tire.age}</span>
         </div>
 
         {/* Pit status */}
-        <span className="w-9 flex-shrink-0 flex justify-center">
+        <span className="w-8 flex-shrink-0 flex justify-center">
           <span
             className={cn(
               "text-[9px] font-bold leading-none px-1 py-0.5 rounded border",
@@ -186,6 +207,11 @@ function DriverRowMobile({
         {/* Gap */}
         <span className="flex-1 text-xs text-zinc-300 font-mono tabular-nums text-right pr-2 truncate">
           {gapText}
+        </span>
+
+        {/* Best lap */}
+        <span className={cn(BEST_LAP_COL, "text-[11px] font-mono tabular-nums", bestLapColor)}>
+          {driver.bestLap || "–:–-.–––"}
         </span>
 
         {/* Last lap */}
@@ -247,7 +273,13 @@ function DriverRowMobile({
 
                 {/* Right side: last lap + PIT count + pin */}
                 <div className="ml-auto flex flex-col items-end gap-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-start gap-3">
+                    <div className="flex flex-col items-end min-[390px]:hidden">
+                      <span className="text-[8px] text-zinc-600 uppercase">{t("timing.bestLap")}</span>
+                      <span className={cn("font-mono text-xs tabular-nums", bestLapColor)}>
+                        {driver.bestLap || "–:–-.–––"}
+                      </span>
+                    </div>
                     <div className="flex flex-col items-end">
                       <span className="text-[8px] text-zinc-600 uppercase">{t("driver.lastLap")}</span>
                       <span className={cn("font-mono text-xs tabular-nums", lastLapColor)}>
@@ -311,6 +343,14 @@ export default function MobileTimingBoard({
     if (active <= 10) return null;
     return active - 6 + 1;
   })();
+
+  // Purple on whoever holds the session's fastest lap, as on the broadcast.
+  const fastestLapMs = drivers.reduce(
+    (best, d) => Math.min(best, lapTimeToMs(d.bestLap)),
+    Infinity,
+  );
+  const hasFastestLap = (d: Driver) =>
+    fastestLapMs !== Infinity && lapTimeToMs(d.bestLap) === fastestLapMs;
 
   const toggleExpand = (num: string) => {
     setExpandedDriver((prev) => (prev === num ? null : num));
@@ -425,13 +465,13 @@ export default function MobileTimingBoard({
       {/* Column headers */}
       <div className="flex items-center gap-0 px-2 py-1 border-b border-zinc-800/80 bg-zinc-950/60 shrink-0">
         <span className="w-5 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase">#</span>
-        <span className="w-14 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1">
+        <span className="w-12 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1">
           {t("timing.driver") || "PILOTO"}
         </span>
-        <span className="w-12 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1 truncate">
+        <span className="w-11 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase mx-1 truncate">
           {t("timing.tireShort")}
         </span>
-        <span className="w-9 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase">
+        <span className="w-8 flex-shrink-0 text-center text-[10px] tracking-widest text-zinc-600 uppercase">
           {t("timing.pit")}
         </span>
         <button
@@ -447,6 +487,9 @@ export default function MobileTimingBoard({
           {t(gapPrimary === "gap" ? "timing.gap" : "timing.interval")}
           <ArrowUpDown size={8} className="opacity-60 shrink-0" />
         </button>
+        <span className={cn(BEST_LAP_COL, "text-[10px] tracking-widest text-zinc-600 uppercase")}>
+          {t("timing.bestLap")}
+        </span>
         <span className="w-[68px] flex-shrink-0 text-right text-[10px] tracking-widest text-zinc-600 uppercase">
           {t("timing.lastLap") || "ÚLT. VTA"}
         </span>
@@ -467,6 +510,7 @@ export default function MobileTimingBoard({
               eliminationCutoff={eliminationCutoff}
               isExpanded={expandedDriver === d.driverNumber}
               isPinned={pinnedDriverNumber === d.driverNumber}
+              hasFastestLap={hasFastestLap(d)}
               gapPrimary={gapPrimary}
               onToggle={() => toggleExpand(d.driverNumber)}
               onPin={() => togglePin(d.driverNumber)}
@@ -488,6 +532,7 @@ export default function MobileTimingBoard({
             eliminationCutoff={eliminationCutoff}
             isExpanded={false}
             isPinned
+            hasFastestLap={hasFastestLap(pinnedDriver)}
             gapPrimary={gapPrimary}
             docked
             onToggle={() => {
