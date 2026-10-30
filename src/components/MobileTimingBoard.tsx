@@ -220,7 +220,7 @@ function DriverRowMobile({
         </span>
 
         {/* Chevron */}
-        <span className={cn("text-zinc-600 text-[10px] flex-shrink-0 ml-1 transition-transform duration-200", isExpanded && "rotate-180")}>
+        <span className={cn("w-4 flex-shrink-0 text-center text-zinc-600 text-[10px] transition-transform duration-200", isExpanded && "rotate-180")}>
           ▾
         </span>
       </button>
@@ -482,16 +482,18 @@ export default function MobileTimingBoard({
               ? "timing.gapToggleTooltip"
               : "timing.intervalToggleTooltip",
           )}
-          className="flex-1 flex items-center justify-end gap-1 pr-2 text-[10px] tracking-widest text-zinc-600 uppercase active:text-zinc-300 transition-colors"
+          className="flex-1 min-w-0 flex items-center justify-end gap-1 pr-2 text-[10px] tracking-widest text-zinc-600 uppercase active:text-zinc-300 transition-colors"
         >
-          {t(gapPrimary === "gap" ? "timing.gap" : "timing.interval")}
+          <span className="truncate">
+            {t(gapPrimary === "gap" ? "timing.gapShort" : "timing.intervalShort")}
+          </span>
           <ArrowUpDown size={8} className="opacity-60 shrink-0" />
         </button>
-        <span className={cn(BEST_LAP_COL, "text-[10px] tracking-widest text-zinc-600 uppercase")}>
+        <span className={cn(BEST_LAP_COL, "text-[10px] tracking-widest text-zinc-600 uppercase whitespace-nowrap overflow-hidden")}>
           {t("timing.bestLap")}
         </span>
-        <span className="w-[68px] flex-shrink-0 text-right text-[10px] tracking-widest text-zinc-600 uppercase">
-          {t("timing.lastLap") || "ÚLT. VTA"}
+        <span className="w-[68px] flex-shrink-0 text-right text-[10px] tracking-widest text-zinc-600 uppercase whitespace-nowrap overflow-hidden">
+          {t("timing.lastLapShort")}
         </span>
         <span className="w-4 flex-shrink-0" />
       </div>

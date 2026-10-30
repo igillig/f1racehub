@@ -37,6 +37,10 @@ const translations = {
     "timing.waiting": "Esperando datos de pilotos...",
     "timing.lastLap": "Últ. Vuelta",
     "timing.bestLap": "Mejor",
+    // Cabeceras de la tabla mobile: las columnas no dan para la palabra entera.
+    "timing.gapShort": "DIF.",
+    "timing.intervalShort": "INT.",
+    "timing.lastLapShort": "ÚLT.",
     "timing.waitingData": "Esperando datos...",
     "driver.lastLap": "Última Vuelta",
 
@@ -307,6 +311,10 @@ const translations = {
     "timing.waiting": "Waiting for driver data...",
     "timing.lastLap": "Last Lap",
     "timing.bestLap": "Best",
+    // Mobile table headers: the columns cannot fit the full word.
+    "timing.gapShort": "GAP",
+    "timing.intervalShort": "INT.",
+    "timing.lastLapShort": "LAST",
     "timing.waitingData": "Waiting for data...",
     "driver.lastLap": "Last Lap",
 
