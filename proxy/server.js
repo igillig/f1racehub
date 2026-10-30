@@ -132,6 +132,9 @@ const KILL_PENDING_BYTES = 4 * 1024 * 1024;
 let updatePending = false;
 const delivery = { sent: 0, skipped: 0, dropped: 0, resyncs: 0 };
 
+// When a source last handed us something to send (not keepalives).
+let lastBroadcastAt = Date.now();
+
 // Rolling window of everything broadcast, so a viewer can join the stream
 // behind live without being shown the present first. See stream-buffer.js.
 const streamBuffer = createStreamBuffer();
@@ -286,6 +289,10 @@ setInterval(() => {
 // immediately and are never skipped — a client that misses a reset would keep
 // showing the previous session.
 function broadcastSSE(event, data) {
+  // Any call here means a source produced something. The idle supervisor reads
+  // it to tell a live source that is working from one that is merely connected.
+  lastBroadcastAt = Date.now();
+
   if (event === "update") {
     // The flush reads currentState directly (every source mutates it in place),
     // so the payload passed here is redundant.
@@ -380,8 +387,11 @@ async function tryUpgradeToLive() {
 
   try {
     if (hasMQTTCredentials()) {
+      // Strictly `true`: an unknown answer (OpenF1 down, 401, rate limited)
+      // used to read as "live" and tore down a perfectly good replay, leaving
+      // the dashboard empty until someone redeployed.
       const sessionLive = await checkActiveSession();
-      if (!sessionLive) return;
+      if (sessionLive !== true) return;
 
       console.log(
         "[proxy] Watchdog: live session detected — stopping replay, starting MQTT+SignalR",
@@ -400,7 +410,7 @@ async function tryUpgradeToLive() {
         console.log(
           "[proxy] Watchdog: MQTT found no active session — restarting replay",
         );
-        startReplay(broadcastSSE, currentState);
+        startReplaySupervised();
       }
     } else {
       // No MQTT credentials — try live-polling (it checks for active session internally)
@@ -418,6 +428,75 @@ async function tryUpgradeToLive() {
     console.error("[proxy] Watchdog check error:", err.message);
   }
 }
+
+// ── Keeping the demo alive ───────────────────────────────────────────────────
+// startReplay() can fail for reasons that pass: OpenF1 unreachable on a cold
+// archive, a locked SQLite file. Nothing else in the proxy notices, and a dead
+// replay is a dead dashboard — no frames, no banner, nothing to look at — so
+// retry with backoff until it takes.
+
+const REPLAY_RETRY_BASE_MS = 30_000;
+const REPLAY_RETRY_MAX_MS = 5 * 60_000;
+let replayRetryTimer = null;
+
+async function startReplaySupervised(attempt = 0) {
+  if (replayRetryTimer) {
+    clearTimeout(replayRetryTimer);
+    replayRetryTimer = null;
+  }
+  const ok = await startReplay(broadcastSSE, currentState);
+  if (ok || isMQTTRunning() || isLivePollingRunning()) return;
+
+  const delay = Math.min(
+    REPLAY_RETRY_BASE_MS * 2 ** attempt,
+    REPLAY_RETRY_MAX_MS,
+  );
+  console.warn(
+    `[proxy] Replay failed to start — retrying in ${delay / 1000}s`,
+  );
+  replayRetryTimer = setTimeout(
+    () => startReplaySupervised(attempt + 1),
+    delay,
+  );
+  replayRetryTimer.unref?.();
+}
+
+// ── Live-source idle supervisor ──────────────────────────────────────────────
+// A live source can be "running" and still deliver nothing. The session check
+// answers `null` when OpenF1 cannot be reached, the startup path connects on
+// that maybe, and the watchdog stops itself as soon as MQTT is up — so a wrong
+// guess used to park the proxy in mqtt-live forever: no frames, no demo
+// banner, and a redeploy the only way out. If nothing has gone out for a while
+// and no session is confirmed on air, go back to replay and let the watchdog
+// upgrade again when a session really starts.
+
+const LIVE_IDLE_LIMIT_MS = 5 * 60_000;
+const LIVE_IDLE_CHECK_MS = 60_000;
+
+async function checkLiveSourceIdle() {
+  if (!isMQTTRunning() && !isLivePollingRunning()) return;
+
+  const idleMs = Date.now() - lastBroadcastAt;
+  if (idleMs < LIVE_IDLE_LIMIT_MS) return;
+
+  // A confirmed live session means this is a quiet moment (red flag, a gap
+  // between runs in Practice), not a dead source. `null` is not a confirmation.
+  const sessionLive = await checkActiveSession();
+  if (sessionLive === true) return;
+
+  console.warn(
+    `[proxy] Live source silent for ${Math.round(idleMs / 1000)}s and no ` +
+      `active session confirmed — falling back to replay`,
+  );
+  stopMQTT();
+  stopSignalR();
+  stopLivePolling();
+  clearCurrentState();
+  await startReplaySupervised();
+  startSessionWatchdog();
+}
+
+setInterval(checkLiveSourceIdle, LIVE_IDLE_CHECK_MS).unref();
 
 // ── Session archive maintenance ──────────────────────────────────────────────
 // Keeps the SQLite archive holding the latest finished sessions. Runs in every
@@ -442,7 +521,7 @@ async function maintainSessionArchive() {
         );
         stopReplay();
         clearCurrentState();
-        startReplay(broadcastSSE, currentState);
+        startReplaySupervised();
       },
     });
   } catch (err) {
@@ -481,7 +560,7 @@ async function startFallbackNoLive() {
     console.log(
       "[proxy] No active session — starting replay (watchdog will upgrade to live)",
     );
-    startReplay(broadcastSSE, currentState);
+    startReplaySupervised();
     startSessionWatchdog();
   }
 }
@@ -559,6 +638,9 @@ const handleRequest = async (req, res) => {
       signalrRunning: isSignalRRunning(),
       locationSource: currentState.locationSource ?? "none",
       watchdogRunning: sessionWatchdog !== null,
+      // Seconds since any source last produced a frame. Climbing past 300 in a
+      // live mode is what the idle supervisor acts on.
+      lastDataAgeSec: Math.round((Date.now() - lastBroadcastAt) / 1000),
       // SSE delivery health — `skipped` climbing means clients cannot keep up
       // with the stream, `maxPendingKB` is the worst socket's current backlog.
       delivery: { ...delivery, maxPendingKB: maxPendingKB() },
@@ -877,7 +959,7 @@ server.listen(PORT, async () => {
     }
   } else if (PROXY_MODE === "replay") {
     console.log("[proxy] Override: replay...");
-    startReplay(broadcastSSE, currentState);
+    startReplaySupervised();
   } else {
     // Auto mode
     console.log(`[proxy] Auto mode — checking for live session...`);

@@ -981,13 +981,28 @@ async function fetchHistoricalData(sessionKey) {
  * Check if there is an active F1 session right now.
  * Returns true if session ended within the last 30 minutes (post-race window).
  */
+/**
+ * Is a session on air right now?
+ *
+ * Tri-state on purpose: `null` means "could not tell". OpenF1 answers 401 for
+ * its whole REST API while a session is live, and rate limits or a network
+ * blip look the same from here. Each caller decides what unknown means for it:
+ * the startup path may connect optimistically, but the watchdog must never
+ * tear down a working replay on a maybe — that left the proxy in mqtt-live
+ * with no data and no way back.
+ */
 export async function checkActiveSession() {
   try {
     const token = await ensureValidToken();
     const response = await fetch(`${API_BASE}/sessions?session_key=latest`, {
       headers: { accept: "application/json", Authorization: `Bearer ${token}` },
     });
-    if (!response.ok) return true; // can't check → assume active
+    if (!response.ok) {
+      console.warn(
+        `[openf1-mqtt] Session check failed (HTTP ${response.status}) — active state unknown`,
+      );
+      return null;
+    }
     const sessions = await response.json();
     if (!sessions?.length) return false;
     const session = sessions[0];
@@ -1000,8 +1015,11 @@ export async function checkActiveSession() {
       );
     }
     return isActive;
-  } catch {
-    return true; // assume active on error
+  } catch (err) {
+    console.warn(
+      `[openf1-mqtt] Session check error (${err.message}) — active state unknown`,
+    );
+    return null;
   }
 }
 
@@ -1090,10 +1108,17 @@ export async function startMQTT(broadcast, stateRef) {
     return false;
   }
 
-  // Check if there is an active session before connecting
+  // Check if there is an active session before connecting. Unknown (`null`)
+  // connects anyway — the idle supervisor in server.js falls back to replay if
+  // the guess turns out to be wrong and no data ever arrives.
   const sessionActive = await checkActiveSession();
-  if (!sessionActive) {
+  if (sessionActive === false) {
     return false;
+  }
+  if (sessionActive === null) {
+    console.log(
+      "[openf1-mqtt] Could not confirm an active session — connecting anyway",
+    );
   }
 
   isRunning = true;

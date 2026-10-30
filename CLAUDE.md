@@ -73,6 +73,12 @@ Set `PROXY_MODE` in `proxy/.env`:
 
 **Session watchdog**: when the proxy falls back to replay, a watchdog timer fires every 60s and calls `checkActiveSession()`. As soon as a live session appears in the OpenF1 API (typically at session start), the watchdog stops replay, clears state, and starts MQTT+SignalR automatically. This prevents the common failure where the proxy starts during a break between sessions and stays in replay for the entire next session.
 
+`checkActiveSession()` is **tri-state**: `true`, `false`, or `null` when it could not tell (OpenF1 answers 401 for its whole REST API during a live session, and rate limits look the same). The watchdog only leaves replay on a literal `true` — an unknown used to count as "live", so a single failed check tore down a working replay.
+
+**Live-source idle supervisor**: `startMQTT()` still connects on an unknown session check, so a wrong guess could park the proxy in `mqtt-live` with no data, no demo banner and the watchdog already stopped — only a redeploy got it out. Every 60s, if a live source is running, nothing has been broadcast for 5 min (`lastDataAgeSec` in `/health`) and no session is confirmed on air, the proxy stops the live source, falls back to replay and restarts the watchdog. A confirmed live session means a quiet moment (red flag, a gap between practice runs), never a fallback.
+
+**Replay is supervised**: every `startReplay()` call in `server.js` goes through `startReplaySupervised()`, which retries with backoff (30s → 5 min) — a failed start used to leave the dashboard with nothing and no retry. In `replay.js`, each poll cycle is wrapped in try/catch: one throw used to kill the recursive `setTimeout` chain for good, freezing the demo mid-session and never reaching the end-of-data check that loops it back.
+
 ## OpenF1 MQTT (paid tier)
 
 - Auth: `POST https://api.openf1.org/token` with `username`/`password` → Bearer token

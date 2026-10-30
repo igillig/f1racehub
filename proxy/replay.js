@@ -748,9 +748,30 @@ function scheduleNextPoll(gen) {
   if (!replayStarted || gen !== replayGeneration) return;
   replayInterval = setTimeout(async () => {
     if (!replayStarted || gen !== replayGeneration) return;
-    await pollAndBroadcast();
+    try {
+      await pollAndBroadcast();
+    } catch (err) {
+      // One bad cycle (a REST error, a malformed row) must not take the chain
+      // down with it. Nothing supervises this loop, so a throw here used to
+      // freeze the replay where it stood — including before the end-of-data
+      // check that loops it back to the start.
+      console.error("[Replay] Poll cycle failed:", err.message);
+    }
     scheduleNextPoll(gen);
   }, POLL_INTERVAL_MS);
+}
+
+// The loop restart depends on a fresh startReplay succeeding; if it doesn't
+// (OpenF1 unreachable, SQLite busy) there is no poll chain left to try again.
+function retryStartReplay(broadcast, stateRef, attempt = 0) {
+  const delay = Math.min(30_000 * 2 ** attempt, 5 * 60_000);
+  console.warn(`[Replay] Restart failed — retrying in ${delay / 1000}s`);
+  const timer = setTimeout(async () => {
+    if (replayStarted) return;
+    const ok = await startReplay(broadcast, stateRef);
+    if (!ok) retryStartReplay(broadcast, stateRef, attempt + 1);
+  }, delay);
+  timer.unref?.();
 }
 
 // Poll for new data and broadcast
@@ -775,7 +796,8 @@ async function pollAndBroadcast() {
     stopReplay();
     for (const key of Object.keys(stateRef)) delete stateRef[key];
     broadcast("reset", {});
-    await startReplay(broadcast, stateRef);
+    const restarted = await startReplay(broadcast, stateRef);
+    if (!restarted) retryStartReplay(broadcast, stateRef);
     return;
   }
 
