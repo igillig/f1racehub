@@ -77,8 +77,15 @@ export default function TimingBoard({
     width: number;
   } | null>(null);
 
+  // Scoped to this card, never document-wide: the mobile board marks its
+  // pinned row with the same attribute and sits earlier in the DOM, hidden by
+  // `lg:hidden` — which is display:none, so it is still queryable and measures
+  // as a zero-size rect. A document-wide lookup found *that* row, read
+  // `bottom: 0` as "scrolled off the top" and docked the frozen copy above the
+  // leader every time, whatever position the pinned driver actually held.
   const getPinnedEl = () =>
-    document.querySelector<HTMLElement>('[data-pinned-row="true"]');
+    cardRef.current?.querySelector<HTMLElement>('[data-pinned-row="true"]') ??
+    null;
 
   // Update pinned row position + card bounds using event-driven observers
   useEffect(() => {
