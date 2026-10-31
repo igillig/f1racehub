@@ -129,6 +129,20 @@ function parseF1Time(value) {
   return isNaN(v) || v <= 0 ? null : v;
 }
 
+/**
+ * Parse an F1 gap/interval string ("+1.151", "LAPPED", "+1 LAP", "") into the
+ * shape the frontend's formatGap expects: null for the leader (empty diff),
+ * a number of seconds for a numeric gap, or the raw string for lapped cars.
+ */
+function parseTimeDiff(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null; // leader: TimeDiffToFastest is empty
+  if (/lap/i.test(s)) return s; // "+1 LAP" / "LAPPED" — keep as string
+  const num = parseFloat(s.replace(/^\+/, ""));
+  return Number.isFinite(num) && num > 0 ? num : null;
+}
+
 // ── Message handlers ─────────────────────────────────────────────────────────
 
 /**
@@ -211,6 +225,29 @@ function processTimingData(data, isSnapshot = false) {
       const pos = parseInt(String(driverData.Position), 10);
       if (!isNaN(pos) && pos > 0) {
         entry.position = pos;
+        changed = true;
+      }
+    }
+
+    // Gap to leader (TimeDiffToFastest) and interval to the car ahead
+    // (TimeDiffToPositionAhead). SignalR is the authoritative live source for
+    // both — OpenF1 MQTT only fires intervals on change and is ~4s behind.
+    if (driverData.TimeDiffToFastest !== undefined) {
+      entry.gap_to_leader = parseTimeDiff(driverData.TimeDiffToFastest);
+      changed = true;
+    }
+    if (driverData.TimeDiffToPositionAhead !== undefined) {
+      entry.interval = parseTimeDiff(driverData.TimeDiffToPositionAhead);
+      changed = true;
+    }
+
+    // Current lap number. NOTE: `Line` is NOT the pit-stop count — in TimingData
+    // it holds the driver's position in the timing tower (equals `Position`),
+    // so it must not be written to pit_count (that showed "PIT <position>").
+    if (driverData.NumberOfLaps != null) {
+      const laps = parseInt(String(driverData.NumberOfLaps), 10);
+      if (!isNaN(laps)) {
+        entry.lap_number = laps;
         changed = true;
       }
     }
@@ -486,6 +523,248 @@ function processDriverList(data) {
 }
 
 /**
+ * SessionInfo — session + meeting metadata. SignalR is the only live source in
+ * signalr-only mode (no OpenF1 /sessions). Maps onto the OpenF1Session shape the
+ * frontend already consumes, so no frontend change is needed.
+ *
+ * Format: { Key, Type, Number, Name, StartDate, EndDate, GmtOffset, Path,
+ *           Meeting: { Key, Name, Location, Country: {Key, Code, Name},
+ *                      Circuit: { Key, ShortName } }, SessionStatus, ... }
+ */
+let f1SessionPath = "";
+
+function processSessionInfo(data) {
+  if (!currentStateRef || !data) return;
+  const meeting = data.Meeting || {};
+  const circuit = meeting.Circuit || {};
+  const country = meeting.Country || {};
+
+  const endDate = data.EndDate ? new Date(data.EndDate) : null;
+  // Same guard as OpenF1 handleSession: only expose date_end once the session is
+  // truly over (>30 min past), otherwise a premature EndDate would flip isLive
+  // to false mid-session and dump every car to the pit lane.
+  const endIsPast =
+    endDate && endDate < new Date(Date.now() - 30 * 60 * 1000);
+
+  const type = data.Type || "Practice";
+  const sessionType =
+    type === "SprintShootout" || type === "SprintQualifying"
+      ? "Sprint Shootout"
+      : type;
+
+  currentStateRef.session = {
+    session_key: data.Key,
+    session_name: data.Name || sessionType,
+    session_type: sessionType,
+    circuit_key: circuit.Key,
+    circuit_short_name: circuit.ShortName || meeting.Location,
+    country_name: country.Name,
+    country_code: country.Code,
+    date_start: data.StartDate,
+    date_end: endIsPast ? data.EndDate : null,
+    location: meeting.Location,
+    meeting_name: meeting.Name || meeting.Location,
+  };
+
+  if (data.Path) f1SessionPath = data.Path;
+  if (broadcastFn) broadcastFn("update", currentStateRef);
+}
+
+/**
+ * WeatherData — live weather. Maps F1 field names onto the OpenF1 weather shape.
+ * Values arrive as strings ("24.5", "0"), so coerce to numbers.
+ */
+function processWeatherData(data) {
+  if (!currentStateRef || !data) return;
+  const num = (v) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  currentStateRef.weather = {
+    air_temperature: num(data.AirTemp),
+    track_temperature: num(data.TrackTemp),
+    humidity: num(data.Humidity),
+    pressure: num(data.Pressure),
+    rainfall: data.Rainfall === "1" || data.Rainfall === 1 || data.Rainfall === true,
+    wind_speed: num(data.WindSpeed),
+    wind_direction: num(data.WindDirection),
+  };
+  if (broadcastFn) broadcastFn("update", currentStateRef);
+}
+
+/**
+ * TeamRadio — live team radio clip metadata. Builds the full static media URL
+ * from the session Path + clip Path, matching the "full URL" the frontend
+ * expects from OpenF1's recording_url.
+ */
+function processTeamRadio(data) {
+  if (!currentStateRef || !data?.Captures) return;
+  if (!Array.isArray(currentStateRef.team_radio)) {
+    currentStateRef.team_radio = [];
+  }
+  let added = false;
+  for (const capture of Object.values(data.Captures)) {
+    if (!capture || !capture.Path) continue;
+    const url = `https://livetiming.formula1.com/static/${f1SessionPath}${capture.Path}`;
+    if (currentStateRef.team_radio.some((r) => r.recording_url === url)) continue;
+    currentStateRef.team_radio.push({
+      date: capture.Utc,
+      driver_number: parseInt(capture.RacingNumber, 10) || null,
+      recording_url: url,
+    });
+    added = true;
+  }
+  if (added) {
+    if (currentStateRef.team_radio.length > 30) {
+      currentStateRef.team_radio = currentStateRef.team_radio.slice(-30);
+    }
+    if (broadcastFn) broadcastFn("update", currentStateRef);
+  }
+}
+
+/**
+ * TimingAppData — real-time tyre compound + stint info. F1 sends
+ * Lines[num].Stints[stintNum] = { Compound, TotalLaps, StartLaps, New }.
+ * Same shape as OpenF1 v1/stints: compound, tyre age (TotalLaps), stint number.
+ */
+let tyreCompoundSeen = false;
+function processTimingAppData(data) {
+  if (!currentStateRef || !data?.Lines) return;
+  let changed = false;
+  for (const [driverNum, driverData] of Object.entries(data.Lines)) {
+    if (!driverData || typeof driverData !== "object") continue;
+    const num = String(driverNum);
+    const entry = ensureTimingEntry(currentStateRef, num);
+
+    const stints = driverData.Stints;
+    if (stints && typeof stints === "object") {
+      for (const [stintIdxStr, stintData] of Object.entries(stints)) {
+        if (!stintData || typeof stintData !== "object") continue;
+        const stintNum = parseInt(stintIdxStr, 10);
+        if (stintData.Compound != null) {
+          if (!tyreCompoundSeen) {
+            console.log("[signalr] TimingAppData delivering — tyre compounds active");
+            tyreCompoundSeen = true;
+          }
+          entry.compound = String(stintData.Compound).toUpperCase();
+          changed = true;
+        }
+        if (stintData.TotalLaps != null) {
+          entry.tyre_age = parseInt(stintData.TotalLaps, 10) || 0;
+          changed = true;
+        }
+        if (!isNaN(stintNum)) {
+          // Stint keys are 0-indexed, so the highest stint index equals the
+          // number of completed pit stops (stint 0 = fresh tyres, stint 4 = 4
+          // stops). OpenF1 reports stint_number 1-indexed, so shift by one.
+          entry.stint_number = stintNum + 1;
+          entry.pit_count = stintNum;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed && broadcastFn) broadcastFn("update", currentStateRef);
+}
+
+/**
+ * RaceControlMessages — real-time flags/penalties. Maps onto the OpenF1
+ * race_control_messages shape (date, message, flag, category, scope, sector,
+ * driver_number, lap_number).
+ */
+function processRaceControlMessages(data) {
+  if (!currentStateRef || !data?.Messages) return;
+  if (!Array.isArray(currentStateRef.race_control_messages)) {
+    currentStateRef.race_control_messages = [];
+  }
+  let added = false;
+  for (const msg of Object.values(data.Messages)) {
+    if (!msg || !msg.Message) continue;
+    const mapped = {
+      date: msg.Utc,
+      message: msg.Message,
+      flag: msg.Flag || null,
+      category: msg.Category || "Other",
+      scope: msg.Scope || null,
+      sector: msg.Sector != null ? msg.Sector : null,
+      driver_number: msg.RacingNumber != null ? parseInt(msg.RacingNumber, 10) : null,
+      lap_number: msg.Lap != null ? parseInt(msg.Lap, 10) : null,
+    };
+    const exists = currentStateRef.race_control_messages.some(
+      (m) => m.date === mapped.date && m.message === mapped.message,
+    );
+    if (exists) continue;
+    currentStateRef.race_control_messages.push(mapped);
+    added = true;
+  }
+  if (added) {
+    if (currentStateRef.race_control_messages.length > 50) {
+      currentStateRef.race_control_messages =
+        currentStateRef.race_control_messages.slice(-50);
+    }
+    if (broadcastFn) broadcastFn("update", currentStateRef);
+  }
+}
+
+/**
+ * CarData.z — compressed car telemetry (~4 Hz per car). Payload is a
+ * base64-encoded, raw-deflate-compressed JSON string. Decoded format:
+ *   { Entries: [ { Utc, Cars: { "<num>": { Channels: {
+ *       "0": rpm, "2": speed, "3": gear, "4": throttle, "5": brake, "45": drs
+ *   } } } } ] }
+ * 2026 cars publish no channel "45" (DRS was replaced by Active Aero), so drs
+ * defaults to 0.
+ */
+let carDataMsgCount = 0;
+function processCarData(data) {
+  if (!currentStateRef) return;
+
+  let payload;
+  try {
+    const raw = typeof data === "string" ? data : JSON.stringify(data);
+    const buf = Buffer.from(raw, "base64");
+    const inflated = zlib.inflateRawSync(buf);
+    payload = JSON.parse(inflated.toString("utf8"));
+  } catch {
+    payload = typeof data === "object" ? data : null;
+  }
+  if (!payload?.Entries) return;
+
+  if (!currentStateRef.car_data) currentStateRef.car_data = {};
+  let changed = false;
+
+  if (carDataMsgCount === 0) {
+    console.log("[signalr] CarData.z delivering — telemetry active");
+  }
+  carDataMsgCount++;
+  if (carDataMsgCount % 100 === 0) {
+    console.log(`[signalr] CarData.z: ${carDataMsgCount} messages received`);
+  }
+
+  for (const frame of payload.Entries) {
+    const cars = frame?.Cars;
+    if (!cars || typeof cars !== "object") continue;
+    const date = frame.Utc;
+    for (const [num, car] of Object.entries(cars)) {
+      const ch = car?.Channels;
+      if (!ch || typeof ch !== "object") continue;
+      currentStateRef.car_data[String(num)] = {
+        rpm: ch["0"] ?? 0,
+        speed: ch["2"] ?? 0,
+        n_gear: ch["3"] ?? 0,
+        throttle: ch["4"] ?? 0,
+        brake: ch["5"] ?? 0,
+        drs: ch["45"] ?? 0,
+        date,
+      };
+      changed = true;
+    }
+  }
+
+  if (changed && broadcastFn) broadcastFn("update", currentStateRef);
+}
+
+/**
  * Position.z — compressed car x/y positions (~4 Hz for all cars).
  * Payload is a base64-encoded, raw-deflate-compressed JSON string.
  * Decoded format: { Position: [{ Timestamp: "...", Entries: { "1": { X, Y, Z }, ... } }] }
@@ -599,14 +878,32 @@ function handleFeedMessage(topic, data, isSnapshot = false) {
   else if (topic === "ExtrapolatedClock") processExtrapolatedClock(data);
   else if (topic === "LapCount")        processLapCount(data);
   else if (topic === "DriverList")      processDriverList(data);
+  else if (topic === "SessionInfo")     processSessionInfo(data);
+  else if (topic === "WeatherData")     processWeatherData(data);
+  else if (topic === "TeamRadio")       processTeamRadio(data);
+  else if (topic === "TimingAppData")   processTimingAppData(data);
+  else if (topic === "RaceControlMessages") processRaceControlMessages(data);
   else if (topic === "Position.z")      processPosition(data);
-  // RaceControlMessages, WeatherData, TimingAppData, CarData.z, SessionInfo,
-  // SessionData, TeamRadio: recorded to SQLite above; live data comes from
-  // OpenF1 MQTT. RaceControlMessages will be integrated live once we verify
-  // that SignalR flag strings match what the UI expects.
+  else if (topic === "CarData.z")       processCarData(data);
+  // SessionData (status series Started/Ends) remains recorded-only: the
+  // frontend derives liveness from session.date_end, which SessionInfo covers.
 }
 
 // ── Connection ───────────────────────────────────────────────────────────────
+function extractSubscriptionToken(accessToken) {
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length < 2) return null;
+    const payload = JSON.parse(
+      Buffer.from(parts[1], "base64url").toString("utf8"),
+    );
+    return typeof payload.subscriptionToken === "string"
+      ? payload.subscriptionToken
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 async function connect() {
   if (!isRunning) return;
@@ -625,12 +922,33 @@ async function connect() {
   try {
     const authQS = `authToken=${encodeURIComponent(token)}`;
 
+    // The nested subscription token unlocks the gated .z topics; present it as
+    // a Bearer header. The outer access_token in the query only covers the
+    // public topics. No subscription token = Access/free tier → Position.z and
+    // CarData.z get subscribed but deliver 0 messages.
+    const subscriptionToken = extractSubscriptionToken(token);
+    if (subscriptionToken) {
+      console.log(
+        "[signalr] Subscription token found — sending Bearer for gated topics (Position.z/CarData.z)",
+      );
+    } else {
+      console.warn(
+        "[signalr] No subscription token in F1_LIVETIMING_TOKEN — Position.z/CarData.z will deliver 0 messages",
+      );
+    }
+    const authHeaders = {
+      ...COMMON_HEADERS,
+      ...(subscriptionToken
+        ? { Authorization: `Bearer ${subscriptionToken}` }
+        : {}),
+    };
+
     // Step 1: Negotiate (POST). Returns a connectionToken AND sets AWSALB sticky
     // cookies. The WebSocket MUST send those cookies back, or the load balancer
     // routes it to a different backend that doesn't know our connectionToken → 404.
     const negRes = await fetch(`${NEGOTIATE_URL}&${authQS}`, {
       method: "POST",
-      headers: COMMON_HEADERS,
+      headers: authHeaders,
     });
     if (negRes.status === 401) {
       // Token missing/expired. Manual refresh required — back off long instead
@@ -652,10 +970,16 @@ async function connect() {
       : [negRes.headers.get("set-cookie")].filter(Boolean);
     const stickyCookie = setCookies.map((c) => c.split(";")[0]).join("; ");
 
-    // Step 2: Open WebSocket with the sticky cookie + auth token.
-    const wsUrl = `${WS_BASE}?id=${encodeURIComponent(connToken)}&${authQS}`;
+    // Step 2: Open WebSocket with the sticky cookie + auth token + Bearer
+    // subscription token (unlocks Position.z / CarData.z). SignalR's JWT auth
+    // for the WebSocket transport reads the token from the `access_token` query
+    // param, so we also pass the nested subscription token there.
+    const subQS = subscriptionToken
+      ? `&access_token=${encodeURIComponent(subscriptionToken)}`
+      : "";
+    const wsUrl = `${WS_BASE}?id=${encodeURIComponent(connToken)}&${authQS}${subQS}`;
     ws = new WebSocket(wsUrl, {
-      headers: { ...COMMON_HEADERS, Cookie: stickyCookie },
+      headers: { ...authHeaders, Cookie: stickyCookie },
     });
 
     ws.on("open", () => {
@@ -761,6 +1085,20 @@ export function startSignalR(broadcast, stateRef) {
   isRunning = true;
   broadcastFn = broadcast;
   currentStateRef = stateRef;
+
+  // In signalr-only mode there is no startMQTT() to seed these structures, so
+  // do it here (no-ops if a mode already initialised them).
+  if (!stateRef.session) stateRef.session = null;
+  if (!stateRef.drivers) stateRef.drivers = {};
+  if (!stateRef.timing) stateRef.timing = {};
+  if (!stateRef.location) stateRef.location = {};
+  if (!stateRef.car_data) stateRef.car_data = {};
+  if (!stateRef.lap_count) stateRef.lap_count = { current: 0, total: 0 };
+  if (!stateRef.track_status) stateRef.track_status = { flag: "GREEN" };
+  if (!stateRef.weather) stateRef.weather = null;
+  if (!stateRef.race_control_messages) stateRef.race_control_messages = [];
+  if (!stateRef.team_radio) stateRef.team_radio = [];
+
   console.log(
     "[signalr] Starting F1 live timing client (segments + sector times)...",
   );
@@ -777,7 +1115,10 @@ export function stopSignalR() {
   ws?.close();
   ws = null;
   positionMsgCount = 0;
+  carDataMsgCount = 0;
+  tyreCompoundSeen = false;
   clearPendingPositionFrames();
+  f1SessionPath = "";
   if (currentStateRef) currentStateRef.locationSignalRTs = null;
   broadcastFn = null;
   currentStateRef = null;

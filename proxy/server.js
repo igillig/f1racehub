@@ -38,7 +38,9 @@ import { createStreamBuffer, MAX_DELAY_MS } from "./stream-buffer.js";
 
 const PORT = process.env.PORT || 4000;
 
-// Mode: "live-polling" | "mqtt" | "openf1" (alias for mqtt) | "replay" | "auto"
+// Mode: "live-polling" | "mqtt" | "openf1" (alias for mqtt) | "replay" | "signalr" | "auto"
+// "signalr" runs the official F1 live timing feed as the sole source — no
+// OpenF1 MQTT/REST. Used to validate a full F1-native data path.
 const PROXY_MODE = process.env.PROXY_MODE || "auto";
 
 // Store current state (OpenF1-native format)
@@ -530,7 +532,9 @@ async function maintainSessionArchive() {
 }
 
 // First check is delayed so it doesn't compete with the startup flow
-// (startReplay may already be downloading the same session).
+// (startReplay may already be downloading the same session). Runs in every
+// mode: the SQLite replay archive is built from OpenF1's FREE REST tier, which
+// signalr-only mode keeps (it only drops the paid MQTT live source).
 setTimeout(() => {
   maintainSessionArchive();
   setInterval(maintainSessionArchive, ARCHIVE_CHECK_INTERVAL_MS);
@@ -620,6 +624,7 @@ const handleRequest = async (req, res) => {
     let mode = "unknown";
     if (isLivePollingRunning()) mode = "live-polling";
     else if (isMQTTRunning()) mode = "mqtt-live";
+    else if (isSignalRRunning()) mode = "signalr-live";
     else if (isReplayRunning()) mode = "replay";
     else if (sessionWatchdog !== null) mode = "standby";
 
@@ -858,6 +863,8 @@ const handleRequest = async (req, res) => {
   // OpenF1 read-through proxy — forwards whitelisted GET endpoints to OpenF1
   // with paid-tier auth when available (higher rate limit, no 429 bursts).
   // Used by the landing (sessions) and the standings page (championship, etc.).
+  // OpenF1 REST is FREE — kept in every mode including signalr-only, which only
+  // drops the paid MQTT live source, not the free REST endpoints.
   const OPENF1_PASSTHROUGH = [
     "/api/sessions",
     "/api/championship_drivers",
@@ -960,6 +967,12 @@ server.listen(PORT, async () => {
   } else if (PROXY_MODE === "replay") {
     console.log("[proxy] Override: replay...");
     startReplaySupervised();
+  } else if (PROXY_MODE === "signalr") {
+    console.log("[proxy] Override: signalr live (F1 native, no paid MQTT)...");
+    console.log(
+      "[proxy] Live = SignalR. OpenF1 REST (free tier) kept for calendar/standings/archive.",
+    );
+    startSignalR(broadcastSSE, currentState);
   } else {
     // Auto mode
     console.log(`[proxy] Auto mode — checking for live session...`);
@@ -972,6 +985,13 @@ server.listen(PORT, async () => {
         console.log("[proxy] No live session via MQTT — using fallback...");
         startFallbackNoLive();
       }
+    } else if (process.env.F1_LIVETIMING_TOKEN) {
+      // No MQTT credentials, but an F1 live-timing token → the official SignalR
+      // feed is the live source (drops the paid OpenF1 MQTT tier). checkActiveSession
+      // can't confirm liveness without OpenF1 creds (returns null), so connect
+      // SignalR directly; it reports whatever is on air.
+      console.log("[proxy] F1 token present — starting SignalR live source");
+      startSignalR(broadcastSSE, currentState);
     } else {
       const sessionLive = await checkActiveSession();
       if (sessionLive) {
