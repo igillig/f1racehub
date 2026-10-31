@@ -241,18 +241,13 @@ function processTimingData(data, isSnapshot = false) {
       changed = true;
     }
 
-    // Current lap number and pit-stop count ("Line" is F1's pit counter).
+    // Current lap number. NOTE: `Line` is NOT the pit-stop count — in TimingData
+    // it holds the driver's position in the timing tower (equals `Position`),
+    // so it must not be written to pit_count (that showed "PIT <position>").
     if (driverData.NumberOfLaps != null) {
       const laps = parseInt(String(driverData.NumberOfLaps), 10);
       if (!isNaN(laps)) {
         entry.lap_number = laps;
-        changed = true;
-      }
-    }
-    if (driverData.Line != null) {
-      const pits = parseInt(String(driverData.Line), 10);
-      if (!isNaN(pits)) {
-        entry.pit_count = pits;
         changed = true;
       }
     }
@@ -641,14 +636,6 @@ function processTimingAppData(data) {
     const num = String(driverNum);
     const entry = ensureTimingEntry(currentStateRef, num);
 
-    if (driverData.Line != null) {
-      const pits = parseInt(String(driverData.Line), 10);
-      if (!isNaN(pits)) {
-        entry.pit_count = pits;
-        changed = true;
-      }
-    }
-
     const stints = driverData.Stints;
     if (stints && typeof stints === "object") {
       for (const [stintIdxStr, stintData] of Object.entries(stints)) {
@@ -667,7 +654,11 @@ function processTimingAppData(data) {
           changed = true;
         }
         if (!isNaN(stintNum)) {
-          entry.stint_number = stintNum;
+          // Stint keys are 0-indexed, so the highest stint index equals the
+          // number of completed pit stops (stint 0 = fresh tyres, stint 4 = 4
+          // stops). OpenF1 reports stint_number 1-indexed, so shift by one.
+          entry.stint_number = stintNum + 1;
+          entry.pit_count = stintNum;
           changed = true;
         }
       }
@@ -899,6 +890,20 @@ function handleFeedMessage(topic, data, isSnapshot = false) {
 }
 
 // ── Connection ───────────────────────────────────────────────────────────────
+function extractSubscriptionToken(accessToken) {
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length < 2) return null;
+    const payload = JSON.parse(
+      Buffer.from(parts[1], "base64url").toString("utf8"),
+    );
+    return typeof payload.subscriptionToken === "string"
+      ? payload.subscriptionToken
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 async function connect() {
   if (!isRunning) return;
@@ -917,12 +922,33 @@ async function connect() {
   try {
     const authQS = `authToken=${encodeURIComponent(token)}`;
 
+    // The nested subscription token unlocks the gated .z topics; present it as
+    // a Bearer header. The outer access_token in the query only covers the
+    // public topics. No subscription token = Access/free tier → Position.z and
+    // CarData.z get subscribed but deliver 0 messages.
+    const subscriptionToken = extractSubscriptionToken(token);
+    if (subscriptionToken) {
+      console.log(
+        "[signalr] Subscription token found — sending Bearer for gated topics (Position.z/CarData.z)",
+      );
+    } else {
+      console.warn(
+        "[signalr] No subscription token in F1_LIVETIMING_TOKEN — Position.z/CarData.z will deliver 0 messages",
+      );
+    }
+    const authHeaders = {
+      ...COMMON_HEADERS,
+      ...(subscriptionToken
+        ? { Authorization: `Bearer ${subscriptionToken}` }
+        : {}),
+    };
+
     // Step 1: Negotiate (POST). Returns a connectionToken AND sets AWSALB sticky
     // cookies. The WebSocket MUST send those cookies back, or the load balancer
     // routes it to a different backend that doesn't know our connectionToken → 404.
     const negRes = await fetch(`${NEGOTIATE_URL}&${authQS}`, {
       method: "POST",
-      headers: COMMON_HEADERS,
+      headers: authHeaders,
     });
     if (negRes.status === 401) {
       // Token missing/expired. Manual refresh required — back off long instead
@@ -944,10 +970,16 @@ async function connect() {
       : [negRes.headers.get("set-cookie")].filter(Boolean);
     const stickyCookie = setCookies.map((c) => c.split(";")[0]).join("; ");
 
-    // Step 2: Open WebSocket with the sticky cookie + auth token.
-    const wsUrl = `${WS_BASE}?id=${encodeURIComponent(connToken)}&${authQS}`;
+    // Step 2: Open WebSocket with the sticky cookie + auth token + Bearer
+    // subscription token (unlocks Position.z / CarData.z). SignalR's JWT auth
+    // for the WebSocket transport reads the token from the `access_token` query
+    // param, so we also pass the nested subscription token there.
+    const subQS = subscriptionToken
+      ? `&access_token=${encodeURIComponent(subscriptionToken)}`
+      : "";
+    const wsUrl = `${WS_BASE}?id=${encodeURIComponent(connToken)}&${authQS}${subQS}`;
     ws = new WebSocket(wsUrl, {
-      headers: { ...COMMON_HEADERS, Cookie: stickyCookie },
+      headers: { ...authHeaders, Cookie: stickyCookie },
     });
 
     ws.on("open", () => {
