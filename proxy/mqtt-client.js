@@ -220,12 +220,47 @@ function processMessage(topic, message) {
 }
 
 /**
+ * Is this OpenF1 session actually live right now? A session counts as live when
+ * it has already started and has not finished (allowing a 30-min grace window
+ * for the end, matching checkActiveSession).
+ *
+ * OpenF1 MQTT publishes data for sessions other than the active one — support
+ * series running on the same weekend, and future sessions whose records are
+ * created ahead of time (their date_start is still in the future). Switching
+ * the header to one of those is what flipped FP3 → "Race"/lap counter.
+ */
+const IGNORED_SESSION_TTL_MS = 5 * 60 * 1000;
+const ignoredSessions = new Map(); // session_key -> timestamp of last rejection
+
+function isSessionLiveNow(session) {
+  if (!session) return false;
+  const now = Date.now();
+  const start = session.date_start
+    ? new Date(session.date_start).getTime()
+    : null;
+  const end = session.date_end ? new Date(session.date_end).getTime() : null;
+  if (start && start > now) return false; // hasn't started yet (future session)
+  if (end && end < now - 30 * 60 * 1000) return false; // ended >30 min ago
+  return true;
+}
+
+/**
  * Handle session info
  */
 function handleSession(data) {
   if (!currentStateRef) return;
 
   if (trackedSessionKey !== null && data.session_key !== trackedSessionKey) {
+    // Only switch to a session that is actually on air. Rejecting here keeps
+    // trackedSessionKey unchanged so the self-heal can still fire later for the
+    // real next session.
+    if (!isSessionLiveNow(data)) {
+      ignoredSessions.set(data.session_key, Date.now());
+      console.log(
+        `[openf1-mqtt] Ignoring session ${data.session_key} (${data.session_name || data.session_type}) — not live now (start ${data.date_start}, end ${data.date_end})`,
+      );
+      return;
+    }
     console.log(
       `[openf1-mqtt] Session changed ${trackedSessionKey} → ${data.session_key} — resetting state`,
     );
@@ -736,6 +771,13 @@ function maybeRefreshSession(sessionKey) {
     typeof sessionKey !== "number" ||
     sessionKey === trackedSessionKey
   ) {
+    return;
+  }
+  // Don't re-fetch a session we already verified is not live (future/past).
+  // OpenF1 keeps pushing its data every few seconds, and each push would
+  // otherwise trigger a doomed fetch + rejection loop.
+  const lastIgnored = ignoredSessions.get(sessionKey);
+  if (lastIgnored && Date.now() - lastIgnored < IGNORED_SESSION_TTL_MS) {
     return;
   }
   sessionRefreshInFlight = true;
