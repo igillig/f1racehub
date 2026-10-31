@@ -38,7 +38,9 @@ import { createStreamBuffer, MAX_DELAY_MS } from "./stream-buffer.js";
 
 const PORT = process.env.PORT || 4000;
 
-// Mode: "live-polling" | "mqtt" | "openf1" (alias for mqtt) | "replay" | "auto"
+// Mode: "live-polling" | "mqtt" | "openf1" (alias for mqtt) | "replay" | "signalr" | "auto"
+// "signalr" runs the official F1 live timing feed as the sole source — no
+// OpenF1 MQTT/REST. Used to validate a full F1-native data path.
 const PROXY_MODE = process.env.PROXY_MODE || "auto";
 
 // Store current state (OpenF1-native format)
@@ -530,11 +532,15 @@ async function maintainSessionArchive() {
 }
 
 // First check is delayed so it doesn't compete with the startup flow
-// (startReplay may already be downloading the same session).
-setTimeout(() => {
-  maintainSessionArchive();
-  setInterval(maintainSessionArchive, ARCHIVE_CHECK_INTERVAL_MS);
-}, ARCHIVE_FIRST_CHECK_DELAY_MS);
+// (startReplay may already be downloading the same session). Skipped in
+// signalr-only mode: the archive downloader talks to OpenF1 REST, and the
+// SQLite replay archive is not used by that mode.
+if (PROXY_MODE !== "signalr") {
+  setTimeout(() => {
+    maintainSessionArchive();
+    setInterval(maintainSessionArchive, ARCHIVE_CHECK_INTERVAL_MS);
+  }, ARCHIVE_FIRST_CHECK_DELAY_MS);
+}
 
 function startSessionWatchdog() {
   if (sessionWatchdog) return;
@@ -620,6 +626,7 @@ const handleRequest = async (req, res) => {
     let mode = "unknown";
     if (isLivePollingRunning()) mode = "live-polling";
     else if (isMQTTRunning()) mode = "mqtt-live";
+    else if (isSignalRRunning() && PROXY_MODE === "signalr") mode = "signalr-live";
     else if (isReplayRunning()) mode = "replay";
     else if (sessionWatchdog !== null) mode = "standby";
 
@@ -858,6 +865,9 @@ const handleRequest = async (req, res) => {
   // OpenF1 read-through proxy — forwards whitelisted GET endpoints to OpenF1
   // with paid-tier auth when available (higher rate limit, no 429 bursts).
   // Used by the landing (sessions) and the standings page (championship, etc.).
+  //
+  // Disabled entirely in signalr-only mode: that mode must not touch OpenF1 at
+  // all, so there is no ambiguity about which source a screen is reading.
   const OPENF1_PASSTHROUGH = [
     "/api/sessions",
     "/api/championship_drivers",
@@ -869,6 +879,16 @@ const handleRequest = async (req, res) => {
     reqUrl.pathname.startsWith(p),
   );
   if (passthrough) {
+    if (PROXY_MODE === "signalr") {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "openf1_disabled",
+          detail: "OpenF1 passthrough is disabled in signalr-only mode",
+        }),
+      );
+      return;
+    }
     const endpoint = passthrough.slice("/api/".length);
     const queryString = reqUrl.search;
     const upstreamUrl = `https://api.openf1.org/v1/${endpoint}${queryString}`;
@@ -960,6 +980,12 @@ server.listen(PORT, async () => {
   } else if (PROXY_MODE === "replay") {
     console.log("[proxy] Override: replay...");
     startReplaySupervised();
+  } else if (PROXY_MODE === "signalr") {
+    console.log("[proxy] Override: signalr-only (F1 native, no OpenF1)...");
+    console.log(
+      "[proxy] OpenF1 disabled in this mode: no MQTT, no REST polling, no passthrough, no archive download.",
+    );
+    startSignalR(broadcastSSE, currentState);
   } else {
     // Auto mode
     console.log(`[proxy] Auto mode — checking for live session...`);

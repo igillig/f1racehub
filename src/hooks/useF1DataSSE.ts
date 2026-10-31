@@ -1170,14 +1170,16 @@ export function useF1DataSSE({
         .then((data) => {
           if (data.status !== "ok") return;
           setProxyMode(data.mode ?? null);
+          // SignalR is the authoritative live position source in both the MQTT
+          // hybrid (mqtt-live) and the F1-native (signalr-live) modes.
+          const signalrLive =
+            data.mode === "mqtt-live" || data.mode === "signalr-live";
           signalrOwnsPositionRef.current =
-            data.mode === "mqtt-live" && data.signalrRunning === true;
-          // Degraded only when we actually have a live session running on MQTT
-          // but SignalR isn't connected. In replay/standby a missing SignalR is
-          // expected, so we don't warn there.
-          setSignalrDegraded(
-            data.mode === "mqtt-live" && data.signalrRunning === false,
-          );
+            signalrLive && data.signalrRunning === true;
+          // Degraded only when we actually have a live session but SignalR
+          // isn't connected. In replay/standby a missing SignalR is expected,
+          // so we don't warn there.
+          setSignalrDegraded(signalrLive && data.signalrRunning === false);
         })
         .catch(() => {});
     };
