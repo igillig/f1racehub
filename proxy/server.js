@@ -624,7 +624,7 @@ const handleRequest = async (req, res) => {
     let mode = "unknown";
     if (isLivePollingRunning()) mode = "live-polling";
     else if (isMQTTRunning()) mode = "mqtt-live";
-    else if (isSignalRRunning() && PROXY_MODE === "signalr") mode = "signalr-live";
+    else if (isSignalRRunning()) mode = "signalr-live";
     else if (isReplayRunning()) mode = "replay";
     else if (sessionWatchdog !== null) mode = "standby";
 
