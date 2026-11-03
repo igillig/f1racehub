@@ -69,7 +69,6 @@ export default function AlertStrip({ alert }: { alert: AlertData }) {
 
   const stop = useCallback(() => {
     audioRef.current?.pause();
-    audioRef.current = null;
     setPlayback("idle");
     setProgress(0);
   }, []);
@@ -101,17 +100,12 @@ export default function AlertStrip({ alert }: { alert: AlertData }) {
       return;
     }
 
-    const audio = new Audio(alert.audio);
-    audioRef.current = audio;
+    const audio = audioRef.current;
+    if (!audio) return;
     setPlayback("loading");
     setProgress(0);
-
-    audio.onplaying = () => setPlayback("playing");
-    audio.ontimeupdate = () => {
-      if (audio.duration) setProgress((audio.currentTime / audio.duration) * 100);
-    };
-    audio.onended = stop;
-    audio.onerror = stop;
+    audio.src = alert.audio;
+    audio.load();
     audio.play().catch(stop);
   }, [alert.audio, playback, stop]);
 
@@ -166,6 +160,22 @@ export default function AlertStrip({ alert }: { alert: AlertData }) {
           : { borderColor: "#27272a", backgroundColor: "rgb(24 24 27 / 0.5)" }
       }
     >
+      {/* Persistent audio element — iOS Safari plays detached `new Audio()`
+          instances unreliably, so radio clips go through this DOM element. */}
+      <audio
+        ref={audioRef}
+        preload="auto"
+        onPlaying={() => setPlayback("playing")}
+        onEnded={stop}
+        onError={stop}
+        onTimeUpdate={() => {
+          const audio = audioRef.current;
+          if (audio && audio.duration) {
+            setProgress((audio.currentTime / audio.duration) * 100);
+          }
+        }}
+      />
+
       {/* Unseen marker — pulses for as long as the alert counts as new */}
       {fresh && (
         <span className="relative shrink-0 flex h-2 w-2">

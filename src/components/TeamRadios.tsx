@@ -106,30 +106,26 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
   // Clean up audio on unmount
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
+      audioRef.current?.pause();
     };
   }, []);
 
-  const handlePlay = async (index: number, path: string) => {
-    // If clicking the same one that's playing, stop it
-    if (playingIndex === index) {
-      setPlayingIndex(null);
-      setIsActuallyPlaying(false);
-      setProgress(0);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-      return;
-    }
+  const resetPlayback = () => {
+    setPlayingIndex(null);
+    setIsLoading(false);
+    setIsActuallyPlaying(false);
+    setProgress(0);
+  };
 
-    // Stop any currently playing audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+  const handlePlay = async (index: number, path: string) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    // Clicking the clip that's already playing stops it
+    if (playingIndex === index) {
+      audio.pause();
+      resetPlayback();
+      return;
     }
 
     setIsLoading(true);
@@ -138,49 +134,12 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
     setProgress(0);
 
     try {
-      // Create new audio element with the recording URL
-      const audio = new Audio(path);
-      audioRef.current = audio;
-
-      // Handle when audio ends
-      audio.onended = () => {
-        setPlayingIndex(null);
-        setIsActuallyPlaying(false);
-        setProgress(0);
-        audioRef.current = null;
-      };
-
-      // Handle errors
-      audio.onerror = () => {
-        console.error("Error loading audio:", path);
-        setPlayingIndex(null);
-        setIsLoading(false);
-        setIsActuallyPlaying(false);
-        setProgress(0);
-        audioRef.current = null;
-      };
-
-      // Update progress during playback
-      audio.ontimeupdate = () => {
-        if (audio.duration) {
-          setProgress((audio.currentTime / audio.duration) * 100);
-        }
-      };
-
-      // Handle when audio actually starts playing
-      audio.onplaying = () => {
-        setIsLoading(false);
-        setIsActuallyPlaying(true);
-      };
-
-      // Play the audio
+      audio.src = path;
+      audio.load();
       await audio.play();
     } catch (error) {
       console.error("Error playing audio:", error);
-      setPlayingIndex(null);
-      setIsLoading(false);
-      setIsActuallyPlaying(false);
-      setProgress(0);
+      resetPlayback();
     }
   };
 
@@ -192,6 +151,29 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
 
   return (
     <div className="h-full flex flex-col">
+      {/* Persistent, DOM-attached audio element. iOS Safari is unreliable when
+          playing detached `new Audio()` instances, so the clip is played through
+          this element instead. */}
+      <audio
+        ref={audioRef}
+        preload="auto"
+        onPlaying={() => {
+          setIsLoading(false);
+          setIsActuallyPlaying(true);
+        }}
+        onEnded={resetPlayback}
+        onError={() => {
+          console.error("Error loading audio");
+          resetPlayback();
+        }}
+        onTimeUpdate={() => {
+          const audio = audioRef.current;
+          if (audio && audio.duration) {
+            setProgress((audio.currentTime / audio.duration) * 100);
+          }
+        }}
+      />
+
       {/* Radio list */}
       <div className="flex-1 overflow-y-auto">
         {radios.length > 0 ? (
