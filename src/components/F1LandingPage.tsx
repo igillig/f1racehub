@@ -2,9 +2,10 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
-import { Mail } from "lucide-react";
+import { Mail, Heart } from "lucide-react";
 import LanguageToggle from "@/components/LanguageToggle";
 import ContactModal from "@/components/ContactModal";
+import SupportModal from "@/components/SupportModal";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useNextF1Session, OpenF1Session } from "@/hooks/useNextF1Session";
 import { COUNTRY_CODES } from "@/lib/constants";
@@ -337,6 +338,19 @@ export default function F1LandingPage({ onEnterDemo, replaySession, activeViewer
             {activeViewers}
           </span>
         )}
+        <SupportModal
+          renderTrigger={(open) => (
+            <button
+              onClick={open}
+              className="flex items-center gap-1.5 rounded-full bg-primary hover:bg-primary/90 text-white px-3.5 py-1.5 text-xs font-bold uppercase tracking-wide shadow-lg shadow-primary/40 transition-all hover:scale-[1.04] active:scale-95"
+              style={f1Font}
+              title={t("landing.donate")}
+            >
+              <Heart size={13} className="fill-current" />
+              {t("landing.donate")}
+            </button>
+          )}
+        />
         <LanguageToggle />
       </div>
 

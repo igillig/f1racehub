@@ -279,6 +279,7 @@ const translations = {
     "landing.liveNow": "En Curso",
     "landing.weekendSchedule": "Este Fin de Semana",
     "landing.enterDemo": "Entrar al Modo Demo",
+    "landing.donate": "Donar",
     "landing.replayInfo":
       "Reproduciendo: Azerbaijan GP 2024 · Baku City Circuit",
     "landing.scheduleUnavailable": "Calendario no disponible",
@@ -551,6 +552,7 @@ const translations = {
     "landing.liveNow": "Live Now",
     "landing.weekendSchedule": "Weekend Schedule",
     "landing.enterDemo": "Enter Demo Mode",
+    "landing.donate": "Donate",
     "landing.replayInfo": "Replaying: Azerbaijan GP 2024 · Baku City Circuit",
     "landing.scheduleUnavailable": "Schedule unavailable",
     "landing.countdown.days": "Days",

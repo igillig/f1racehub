@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -11,19 +11,29 @@ const MP_OPTIONS = [
   { label: "$10.000", href: "https://mpago.la/2vSkUWY" },
 ];
 
-export default function SupportModal() {
+interface SupportModalProps {
+  // Custom trigger (e.g. a prominent landing button). Defaults to the footer
+  // text link.
+  renderTrigger?: (open: () => void) => ReactNode;
+}
+
+export default function SupportModal({ renderTrigger }: SupportModalProps) {
   const [open, setOpen] = useState(false);
   const [mpExpanded, setMpExpanded] = useState(false);
   const { t } = useLanguage();
 
   return (
     <>
-      <button
-        onClick={() => setOpen(true)}
-        className="text-pink-400 hover:text-pink-300 transition-colors text-sm font-bold"
-      >
-        ♥ {t("footer.support")}
-      </button>
+      {renderTrigger ? (
+        renderTrigger(() => setOpen(true))
+      ) : (
+        <button
+          onClick={() => setOpen(true)}
+          className="text-pink-400 hover:text-pink-300 transition-colors text-sm font-bold"
+        >
+          ♥ {t("footer.support")}
+        </button>
+      )}
 
       {open && (
         <div
@@ -67,6 +77,21 @@ export default function SupportModal() {
                 <div>
                   <div className="text-white text-sm font-semibold">Cafecito</div>
                   <div className="text-zinc-400 text-xs">cafecito.app/ivangillig</div>
+                </div>
+              </a>
+
+              <a
+                href="https://paypal.me/ivangillig"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 px-4 py-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
+              >
+                <span className="w-5 h-5 flex items-center justify-center rounded bg-[#003087] text-white text-[11px] font-black shrink-0">
+                  P
+                </span>
+                <div>
+                  <div className="text-white text-sm font-semibold">PayPal</div>
+                  <div className="text-zinc-400 text-xs">paypal.me/ivangillig</div>
                 </div>
               </a>
 
