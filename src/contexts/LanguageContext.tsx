@@ -23,6 +23,7 @@ const translations = {
 
     // TimingBoard
     "timing.driver": "Piloto",
+    "timing.pos": "POS",
     "timing.pit": "PIT",
     "timing.tire": "Neumático",
     "timing.position": "+/-",
@@ -297,6 +298,7 @@ const translations = {
 
     // TimingBoard
     "timing.driver": "Driver",
+    "timing.pos": "POS",
     "timing.pit": "PIT",
     "timing.tire": "Tire",
     "timing.position": "+/-",

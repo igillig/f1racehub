@@ -19,11 +19,11 @@ export interface DensityLevel {
 }
 
 export const DENSITY: Record<Density, DensityLevel> = {
-  0: { bar: 16, driver: 95, pit: true, tire: true },
-  1: { bar: 9, driver: 95, pit: true, tire: true },
-  2: { bar: 9, driver: 70, pit: true, tire: true },
-  3: { bar: 9, driver: 70, pit: false, tire: true },
-  4: { bar: 9, driver: 70, pit: false, tire: false },
+  0: { bar: 16, driver: 92, pit: true, tire: true },
+  1: { bar: 9, driver: 92, pit: true, tire: true },
+  2: { bar: 9, driver: 88, pit: true, tire: true },
+  3: { bar: 9, driver: 88, pit: false, tire: true },
+  4: { bar: 9, driver: 88, pit: false, tire: false },
 };
 
 /** `gap-1` between minisector bars. */
@@ -37,6 +37,7 @@ const GAP_COLUMN = 72;
 const LAST_COLUMN = 90;
 const PIT_COLUMN = 47;
 const TIRE_COLUMN = 99;
+const POSITION_COLUMN = 32;
 
 export interface SectorCounts {
   s1: number;
@@ -73,6 +74,7 @@ function columnWidths(level: Density, counts: SectorCounts): number[] {
   const segment = segmentWidth(level);
 
   return [
+    POSITION_COLUMN,
     driver,
     ...(pit ? [PIT_COLUMN] : []),
     ...(tire ? [TIRE_COLUMN] : []),
@@ -91,6 +93,7 @@ export function gridColumns(level: Density, counts: SectorCounts): string {
   const segment = segmentWidth(level);
 
   return [
+    `${POSITION_COLUMN}px`,
     `${driver}px`,
     ...(pit ? [`${PIT_COLUMN}px`] : []),
     ...(tire ? [`${TIRE_COLUMN}px`] : []),

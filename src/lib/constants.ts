@@ -37,8 +37,8 @@ export const TEAM_LOGOS_2026: Record<string, string> = {
   "Racing Bulls": "/images/teams/rb.png",
   "Haas F1 Team": "/images/teams/haas.png",
   Williams: "/images/teams/williams.png",
-  "Aston Martin": "/images/teams/astonmartin.jpg",
-  Audi: "/images/teams/audi.webp",
+  "Aston Martin": "/images/teams/astonmartin.png",
+  Audi: "/images/teams/audi.png",
   Cadillac: "/images/teams/cadillac.png",
 };
 

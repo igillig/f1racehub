@@ -1,7 +1,7 @@
 "use client";
 
 import { Driver, SectorStatus } from "@/types/f1";
-import { TEAM_COLORS, TIRE_COMPOUNDS, TEAM_LOGOS } from "@/lib/constants";
+import { TEAM_COLORS, TIRE_COMPOUNDS, TEAM_LOGOS_2026 } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Pin } from "lucide-react";
@@ -260,6 +260,7 @@ export default function DriverRow({
 
   // Use teamColor from API first, then fallback to hardcoded TEAM_COLORS
   const teamColor = driver.teamColor || TEAM_COLORS[driver.team] || "#888";
+  const teamLogo = TEAM_LOGOS_2026[driver.team];
 
   // eliminationCutoff is computed in TimingBoard from actual active driver count
   // so it's always correct regardless of grid size or session type.
@@ -335,33 +336,46 @@ export default function DriverRow({
             : "3px solid transparent",
       }}
     >
-      {/* Position + Driver Tag — click to pin/unpin, overlay on hover */}
+      {/* Position — number only, no color background */}
       <div
-        className="relative flex items-center h-[38px] px-1 rounded-md overflow-hidden cursor-pointer"
-        style={{ backgroundColor: teamColor }}
+        className="flex items-center justify-end h-[38px] cursor-pointer"
         title={isPinned ? "Click to unpin" : driver.name}
         onClick={(e) => {
           e.stopPropagation();
           onPin?.(isPinned ? null : driver.driverNumber);
         }}
       >
-        <span
-          className={cn(
-            "font-black font-mono tabular-nums leading-none text-center text-white",
-            compact ? "text-lg mr-1 w-7" : "text-xl mr-2 w-9",
-          )}
-        >
+        <span className="font-mono font-bold text-foreground text-lg tabular-nums leading-none">
           {driver.retired ? "RET" : driver.position}
         </span>
-        <div
-          className={cn(
-            "flex items-center justify-center h-[30px] rounded-sm font-black font-mono my-[4px]",
-            compact ? "px-1 text-base" : "px-2 text-lg",
-          )}
-          style={{ backgroundColor: "white", color: teamColor }}
-        >
+      </div>
+
+      {/* Driver — team logo + 3-letter code, no color background */}
+      <div
+        className="relative flex items-center h-[38px] gap-2 overflow-hidden cursor-pointer rounded-md px-1"
+        title={isPinned ? "Click to unpin" : driver.name}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPin?.(isPinned ? null : driver.driverNumber);
+        }}
+      >
+        {teamLogo && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={teamLogo}
+            alt={driver.team}
+            className={cn(
+              "object-contain shrink-0",
+              compact ? "h-[18px] w-[18px]" : "h-[22px] w-[22px]",
+            )}
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        )}
+        <span className="font-f1 font-medium text-foreground truncate">
           {driver.code}
-        </div>
+        </span>
         {/* Pin overlay — shown on row hover or when pinned */}
         <div
           className={cn(
@@ -378,19 +392,6 @@ export default function DriverRow({
           />
         </div>
       </div>
-
-      {/* Team Logo - HIDDEN FOR NOW
-      <div className="flex items-center justify-center">
-        {TEAM_LOGOS[driver.team] && (
-          <img
-            src={TEAM_LOGOS[driver.team]}
-            alt={driver.team}
-            className="h-7 w-7 object-contain"
-            title={driver.team}
-          />
-        )}
-      </div>
-      */}
 
       {/* PIT indicator — the first column dropped when the table runs out of
           room. The pit count stays visible in the tire cell until that goes. */}

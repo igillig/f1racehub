@@ -215,6 +215,7 @@ export default function TimingBoard({
               borderLeft: "3px solid transparent",
             }}
           >
+            <div className="text-right">{t("timing.pos")}</div>
             <div>{t("timing.driver")}</div>
             {level.pit && (
               <div className="text-center">{t("timing.pit")}</div>
