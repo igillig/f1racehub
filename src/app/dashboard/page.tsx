@@ -21,7 +21,7 @@ import FeatureTour from "@/components/FeatureTour";
 import { useF1DataSSE } from "@/hooks/useF1DataSSE";
 import { useBroadcastDelay } from "@/hooks/useBroadcastDelay";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { radioCaption } from "@/lib/radioText";
+import { radioTurns } from "@/lib/radioText";
 import { useTimingSplit } from "@/hooks/useTimingSplit";
 import { sectorCounts } from "@/lib/timingDensity";
 
@@ -143,12 +143,30 @@ export default function DashboardPage() {
     if (radio && (radioTime > msgTime || radioIsFresh)) {
       const driver = drivers.find((d) => d.driverNumber === radio.racingNumber);
       const who = driver ? driver.code : `#${radio.racingNumber}`;
-      const caption = radioCaption(radio, language);
+      const turns = radioTurns(radio, language);
+      // One voice: `HAM: "…"`. Two: each turn gets its own tag, so the strip
+      // reads like the exchange it is.
+      const spoken =
+        turns.length > 1
+          ? turns
+              .map((turn) => {
+                const tag =
+                  turn.speaker === "driver"
+                    ? `${who}:`
+                    : turn.speaker === "engineer"
+                      ? t("teamRadios.engineer")
+                      : "";
+                return `${tag} “${turn.text}”`.trim();
+              })
+              .join(" · ")
+          : turns[0]
+            ? `${who}: “${turns[0].text}”`
+            : "";
       return {
         label: t("alert.radio"),
         // The caption lands a few seconds after the clip, so the strip shows
         // the driver first and the words as soon as they exist.
-        text: caption ? `${who}: “${caption}”` : who,
+        text: spoken || who,
         time: radio.utc,
         icon: "📻" as string | null,
         color: "text-purple-400",

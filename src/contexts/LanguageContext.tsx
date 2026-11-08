@@ -119,6 +119,7 @@ const translations = {
     "teamRadios.title": "Radio de Equipos",
     "teamRadios.noRadios": "No hay comunicaciones",
     "teamRadios.transcribing": "transcribiendo…",
+    "teamRadios.engineer": "ING:",
 
     // TrackViolations
     "violations.title": "Violaciones de Pista",
@@ -395,6 +396,7 @@ const translations = {
     "teamRadios.title": "Team Radios",
     "teamRadios.noRadios": "No communications",
     "teamRadios.transcribing": "transcribing…",
+    "teamRadios.engineer": "ENG:",
 
     // TrackViolations
     "violations.title": "Track Violations",

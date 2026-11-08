@@ -4,7 +4,7 @@ import { RadioCapture, Driver } from "@/types/f1";
 import { TEAM_COLORS } from "@/lib/constants";
 import { useState, useRef, useEffect } from "react";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { radioCaption } from "@/lib/radioText";
+import { radioTurns } from "@/lib/radioText";
 import DriverTag from "./DriverTag";
 
 interface TeamRadiosProps {
@@ -184,11 +184,11 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
             const driverInfo = getDriverInfo(radio.racingNumber);
             const teamColor = TEAM_COLORS[driverInfo.team] || "#888";
             const isPlaying = playingPath === radio.path;
-            const caption = radioCaption(radio, language);
+            const turns = radioTurns(radio, language);
             // Only a clip that just arrived can still be with the
             // transcriber; an old one without text is one that has none.
             const awaitingTranscript =
-              !caption &&
+              turns.length === 0 &&
               Date.now() - new Date(radio.utc).getTime() < 120_000;
 
             return (
@@ -228,13 +228,37 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
 
                 {/* Transcript + playback progress */}
                 <div className="flex-1 min-w-0 flex flex-col gap-1 py-0.5">
-                  {caption ? (
-                    <p
-                      className="text-[11px] leading-snug text-zinc-300 line-clamp-2"
-                      title={caption}
-                    >
-                      {caption}
-                    </p>
+                  {turns.length > 0 ? (
+                    <div className="flex flex-col gap-0.5">
+                      {turns.map((turn, i) => (
+                        <p
+                          key={i}
+                          className="text-[11px] leading-snug text-zinc-300 line-clamp-2"
+                          title={turn.text}
+                        >
+                          {/* Only a clip with two voices carries roles, and
+                              then the tag is what makes it readable: the
+                              driver speaks as themselves, the pit wall as
+                              "ING". */}
+                          {turn.speaker !== "unknown" && (
+                            <span
+                              className="mr-1 font-medium"
+                              style={{
+                                color:
+                                  turn.speaker === "driver"
+                                    ? teamColor
+                                    : "#a1a1aa",
+                              }}
+                            >
+                              {turn.speaker === "driver"
+                                ? driverInfo.code
+                                : t("teamRadios.engineer")}
+                            </span>
+                          )}
+                          {turn.text}
+                        </p>
+                      ))}
+                    </div>
                   ) : (
                     // No caption yet: the clip is still with the transcriber,
                     // or transcription is off. Either way the row keeps the

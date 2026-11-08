@@ -167,6 +167,22 @@ estado SSE, así que se muestra al lado del audio en la lista de radios y en el
 | `transcript` | Verbatim: una radio en español queda en español |
 | `transcript_en` | El mensaje en inglés |
 | `transcript_es` | El mensaje en español latino |
+| `transcript_segments` | Turnos `{speaker, en, es}` — solo cuando hay dos voces |
+
+**Quién habla**: la misma llamada de traducción parte el clip en turnos y
+etiqueta cada uno `driver` / `engineer` / `unknown`. Es inferencia por
+contenido, no diarización acústica: una instrucción ("box this lap") es del
+ingeniero, un reporte en primera persona del auto es del piloto. Se equivoca
+en frases ambiguas y por eso un clip de una sola voz **no** lleva etiqueta
+(`transcript_segments` solo se emite con 2+ turnos). El front usa
+`radioTurns()`; el piloto se muestra con su código en color de equipo y el
+muro con `ING:` / `ENG:`.
+
+Se evaluó `gpt-4o-transcribe-diarize` (diarización real): está **deprecado**
+(apaga el 26/02/2027), **no acepta `prompt`** — se perdería el priming de
+jerga — y devuelve etiquetas anónimas que igual hay que mapear a roles. Si
+alguna vez hay diarización en el modelo recomendado, solo cambia el productor
+de `segments`; la forma del dato y la UI ya están.
 
 En el `AlertStrip` una radio nueva **retiene el strip 20 s** aunque llegue un
 mensaje de race control después (salvo bandera roja, SC, bandera a cuadros y
@@ -191,12 +207,31 @@ sesión y la vuelta como contexto en el prompt, tuteo neutro y pretérito simple
   para no reintentar para siempre entre reinicios).
 - **Config** (`proxy/.env`): `OPENAI_API_KEY` (sin key la feature queda
   apagada y la UI muestra el clip sin texto), `OPENAI_TRANSCRIBE_MODEL`
-  (default `gpt-4o-mini-transcribe`), `OPENAI_TRANSCRIBE_LANGUAGE` (vacío =
-  autodetect, que es lo que mantiene las radios en español/italiano en su
-  idioma), `RADIO_TRANSCRIBE=false` para apagarla sin sacar la key.
-- **Dos llamadas por clip**: speech-to-text y una de chat
-  (`OPENAI_TRANSLATE_MODEL`, default `gpt-4o-mini`) que devuelve
-  `{en, es}` en un solo JSON. Si la traducción falla queda solo el verbatim y
+  (default `gpt-transcribe`), `OPENAI_TRANSCRIBE_LANGUAGES` (default
+  `en`: la radio de equipos se habla en inglés, y declararlo evita que el
+  modelo decida que un clip ruidoso es galés; acepta lista separada por
+  comas si alguna vez hace falta), `RADIO_TRANSCRIBE=false` para apagarla sin
+  sacar la key.
+- **Dos llamadas por clip**: speech-to-text (`OPENAI_TRANSCRIBE_MODEL`,
+  default `gpt-transcribe`, ~US$0,0045/min) y una de chat
+  (`OPENAI_TRANSLATE_MODEL`, default `gpt-4o-mini`) que devuelve los turnos
+  con `{speaker, en, es}` en un solo JSON.
+- **`keywords`**: `gpt-transcribe` es el único que los acepta y es lo que
+  prima los apellidos de los pilotos, los equipos y la jerga de boxes en
+  audio ruidoso. Se arman por clip (`clipKeywords()`) con los pilotos de la
+  sesión + la lista fija de jerga. Los modelos `gpt-4o-*-transcribe` siguen
+  alcanzables por env pero están deprecados y ahí los keywords van metidos en
+  el `prompt`.
+- **El idioma casi no mueve la aguja**: medido re-transcribiendo los mismos
+  clips sin idioma, con 6 idiomas y solo `en`, 4 de 5 salieron idénticos. Se
+  deja `en` porque es la verdad del dominio y elimina el riesgo de detección
+  errónea, no porque mejore la transcripción.
+- **El techo es el audio**: la radio de F1 viene comprimida y con motor
+  encima, así que el STT se come palabras ("we take the **hard**" → "the
+  jar"). Por eso el prompt de traducción tiene permiso explícito para
+  corregir la palabra cuando el contexto de carrera la hace obvia, y orden de
+  dejar vago lo que no se entiende en vez de traducir literal un sustantivo
+  absurdo (así salía "tomamos el jarabe"). Si la traducción falla queda solo el verbatim y
   se reintenta una vez por arranque del proxy, no en loop.
 - `/health` expone `radioTranscription: { enabled, cached: {total, ok, empty, failed, translated} }`.
 - Si se cambia el prompt de traducción, las filas viejas siguen con el texto

@@ -24,11 +24,28 @@ import { getRadioTranscript, saveRadioTranscript } from "./session-store.js";
 
 const TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
 const CHAT_URL = "https://api.openai.com/v1/chat/completions";
-const MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
+// gpt-transcribe is the current recommended STT model ($0.0045/min) and the
+// only one that takes `keywords`, which is what keeps "we take the hard" from
+// coming out as "we take the jar" on a noisy clip. The gpt-4o-* transcribe
+// models still work through this env var but are deprecated upstream.
+const MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-transcribe";
+const SUPPORTS_KEYWORDS = MODEL.startsWith("gpt-transcribe");
 const TRANSLATE_MODEL = process.env.OPENAI_TRANSLATE_MODEL || "gpt-4o-mini";
-// Radios are multilingual (Sainz/Alonso switch to Spanish, Ferrari to Italian).
-// Left unset the model detects; set OPENAI_TRANSCRIBE_LANGUAGE to pin it.
+// Team radio is conducted in English — that is the working language on the
+// pit wall, and it is what the feed carries.
+//
+// Saying so matters: left to detect freely, the model sometimes decides a
+// noisy English clip is Welsh or Dutch and the whole line comes out as
+// nonsense. Declaring the language removes that failure mode outright.
+//
+// OPENAI_TRANSCRIBE_LANGUAGES takes a comma-separated list if a session ever
+// needs more (a driver switching to Spanish or Italian would otherwise come
+// back as an English approximation of what they said, not their own words).
 const LANGUAGE = process.env.OPENAI_TRANSCRIBE_LANGUAGE || null;
+const EXPECTED_LANGUAGES = (process.env.OPENAI_TRANSCRIBE_LANGUAGES || "en")
+  .split(",")
+  .map((code) => code.trim())
+  .filter(Boolean);
 
 const CONCURRENCY = 2;
 const MAX_ATTEMPTS = 3;
@@ -45,16 +62,93 @@ const PROMPT =
   "VSC, safety car, yellow flag, blue flags, delta, lift and coast, " +
   "tyre deg, soft, medium, hard, inters, push now, copy that, mode push.";
 
+// Literal terms the model should expect to hear. Sent as `keywords` to
+// gpt-transcribe; folded into the prompt for the older models.
+const JARGON_KEYWORDS = [
+  "box box box",
+  "in lap",
+  "out lap",
+  "undercut",
+  "overcut",
+  "DRS",
+  "VSC",
+  "safety car",
+  "virtual safety car",
+  "yellow flag",
+  "blue flags",
+  "red flag",
+  "chequered flag",
+  "delta",
+  "lift and coast",
+  "deg",
+  "graining",
+  "blistering",
+  "front wing",
+  "rear wing",
+  "understeer",
+  "oversteer",
+  "balance",
+  "soft",
+  "medium",
+  "hard",
+  "inters",
+  "wets",
+  "slicks",
+  "compound",
+  "stint",
+  "pit lane",
+  "pit wall",
+  "engine mode",
+  "strat mode",
+  "push now",
+  "copy that",
+  "affirm",
+  "negative",
+  "standby",
+  "plan A",
+  "plan B",
+  "track limits",
+  "harvesting",
+  "overtake mode",
+];
+
 const TRANSLATE_SYSTEM = [
   "You caption Formula 1 team radio for a live timing dashboard. The input is",
   "one clip transcribed from a driver talking to their race engineer (or the",
   "engineer answering) during a session: noisy, clipped, often mid-thought.",
-  'Reply with JSON only: {"en": "...", "es": "..."}.',
   "",
-  "`en`: the message in English. If it was spoken in English, repeat it",
-  "unchanged — do not clean it up.",
+  "Reply with JSON only, in this shape:",
+  '{"segments": [{"speaker": "driver", "en": "...", "es": "..."}]}',
   "",
-  "`es`: the message in Latin American Spanish, translated BY MEANING, the way",
+  "Split the clip into one segment per speaking turn, in order. Most clips",
+  "are a single turn — then return exactly one segment. Only split when the",
+  "words clearly change speaker, and never split one person's sentence.",
+  "",
+  "`speaker` is who is talking in that turn:",
+  '- "driver": the one driving. Reports how the car feels (grip, balance,',
+  "  understeer, brakes, tyres), complains, asks what is happening, answers",
+  "  an instruction (copy, understood, yeah).",
+  '- "engineer": the pit wall. Gives instructions and information: box this',
+  "  lap, target delta, mode changes, gaps and positions, who is behind,",
+  "  flags, weather, we are checking, well done.",
+  '- "unknown": genuinely impossible to tell. Use it sparingly — the context',
+  "  line names the driver, so a first-person report about the car is the",
+  "  driver and an instruction aimed at them is the engineer.",
+  "",
+  "`en`: that turn in English, essentially as spoken. Keep the clipped,",
+  "unpolished register; do not tidy the grammar or add words.",
+  "",
+  "The transcript comes from noisy audio and DOES contain mis-heard words.",
+  "When a word makes no sense on a pit-to-car radio but one racing word is",
+  'the obvious match by sound, use that word in both languages: "we take the',
+  'jar" is "we take the hard" (the hard tyre), "boss boss" is "box box",',
+  '"Dallas" next to a lap time is "delta". Only when the fix is obvious —',
+  "never guess at a new fact, a name, a number or an instruction that is not",
+  "there. If a stretch stays unintelligible, leave it as it is in `en` and",
+  "render it vaguely in `es` rather than inventing a literal meaning for it:",
+  "an implausible noun (jarabe, sandía) in a radio caption is always wrong.",
+  "",
+  "`es`: that turn in Latin American Spanish, translated BY MEANING, the way",
   "an F1 broadcast in Latin America would say it. Never word by word: read the",
   "line as racing talk first and then say that in Spanish. 'Slow grip' is",
   "'poco agarre', not 'agarré lento'. 'It's undriveable' is 'es imposible de",
@@ -76,13 +170,21 @@ const TRANSLATE_SYSTEM = [
   "  vuelta de salida, in lap = vuelta de entrada, lift and coast = levantar y",
   "  rodar, traffic = tráfico, blue flags = banderas azules.",
   "- Drop filler address words (mate, man, buddy) instead of translating them.",
+  "- If the turn was already spoken in Spanish, keep the speaker's own words",
+  "  instead of re-wording them; only swap Spain-isms for the neutral term.",
+  "  Same for `en` when the turn was spoken in English. Nothing is ever",
+  "  translated twice: both fields come from the original words.",
   "- Keep driver names, team names, car numbers and lap numbers exactly.",
   "- Same length and register as the original: this is a caption beside an",
   "  audio clip, not a summary and not an explanation.",
   "- If the transcript is garbled, render the part that makes sense as racing",
   "  talk rather than inventing a meaning.",
   "",
-  "Never add commentary, quotes, notes or anything outside the JSON.",
+  "- Translate each turn on its own, but read the whole clip first: a reply",
+  "  often only makes sense next to the instruction before it.",
+  "",
+  "Never add commentary, quotes, notes, speaker names inside the text, or",
+  "anything outside the JSON.",
 ].join("\n");
 
 // Short strings speech models emit for silence or engine noise. Treated as
@@ -145,9 +247,11 @@ export function enrichRadios(stateRef, broadcastFn) {
       if (apply(radio, cached)) patched = true;
       // Transcribed before the bilingual pass existed, or its translation
       // failed: fill in the missing language without re-sending the audio.
+      // `segments` missing entirely = cached before the speaker split
+      // existed; re-run the text-only pass to fill it in.
       if (
         cached.text &&
-        (!cached.en || !cached.es) &&
+        (!cached.en || !cached.es || !Array.isArray(cached.segments)) &&
         !translateGaveUp.has(url)
       ) {
         enqueue({
@@ -171,6 +275,7 @@ export function enrichRadios(stateRef, broadcastFn) {
       driverNumber: radio.driver_number ?? null,
       utc: radio.date || null,
       context: describeClip(stateRef, radio),
+      keywords: clipKeywords(stateRef),
       attempts: 0,
     });
   }
@@ -202,6 +307,36 @@ function describeClip(stateRef, radio) {
   return parts.join(", ");
 }
 
+/**
+ * Literal terms to prime the transcription with: the jargon list plus the
+ * names actually on track this session. Driver surnames and team names are
+ * exactly what a noisy clip mangles, and they are the words a caption is
+ * read for.
+ */
+function clipKeywords(stateRef) {
+  const names = new Set();
+  for (const driver of Object.values(stateRef.drivers || {})) {
+    if (driver?.name_acronym) names.add(driver.name_acronym);
+    if (driver?.full_name) {
+      const surname = String(driver.full_name).trim().split(/\s+/).pop();
+      if (surname && surname.length > 2) names.add(surname);
+    }
+    if (driver?.team_name) names.add(driver.team_name);
+  }
+  const circuit =
+    stateRef.session?.circuit_short_name || stateRef.session?.location;
+  if (circuit) names.add(circuit);
+  // Keyword values may not contain line breaks or angle brackets, or the
+  // whole request is rejected.
+  return [...JARGON_KEYWORDS, ...names]
+    .map((k) =>
+      String(k)
+        .replace(/[<>\r\n]/g, " ")
+        .trim(),
+    )
+    .filter(Boolean);
+}
+
 /** Drops the in-memory cache (the SQLite one survives). */
 export function resetTranscriptionCache() {
   memo.clear();
@@ -231,6 +366,16 @@ function apply(radio, data) {
       changed = true;
     }
   }
+  // Who said what, in order. Only worth sending when the clip actually has
+  // two voices — a single turn is already covered by the flat fields.
+  const segments = Array.isArray(data.segments) ? data.segments : [];
+  if (segments.length > 1) {
+    const serialised = JSON.stringify(segments);
+    if (JSON.stringify(radio.transcript_segments) !== serialised) {
+      radio.transcript_segments = segments;
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -247,10 +392,22 @@ function lookup(url) {
   if (!row) return undefined;
 
   if (row.status === "ok" || row.status === "empty") {
+    // null (not []) when the column is empty: that is how a row cached
+    // before the speaker split is told apart from one with a single turn.
+    let segments = null;
+    if (row.segments) {
+      try {
+        const parsed = JSON.parse(row.segments);
+        if (Array.isArray(parsed)) segments = parsed;
+      } catch {
+        /* a malformed row just means no turn split */
+      }
+    }
     const data = {
       text: row.status === "ok" ? row.text || "" : "",
       en: row.text_en || "",
       es: row.text_es || "",
+      segments,
     };
     memo.set(url, data);
     return data;
@@ -281,20 +438,20 @@ function pump() {
 async function runJob(job) {
   try {
     const text =
-      job.kind === "translate" ? job.text : await transcribeClip(job.url);
+      job.kind === "translate" ? job.text : await transcribeClip(job.url, job);
 
     if (!text) {
-      memo.set(job.url, { text: "", en: "", es: "" });
-      persist(job, { text: "", en: null, es: null }, "empty");
+      memo.set(job.url, { text: "", en: "", es: "", segments: [] });
+      persist(job, { text: "", en: null, es: null, segments: null }, "empty");
       queued.delete(job.url);
       return;
     }
 
-    const { en, es } = await translate(text, job.context);
-    const data = { text, en: en || "", es: es || "" };
+    const { en, es, segments } = await translate(text, job.context);
+    const data = { text, en: en || "", es: es || "", segments };
 
     memo.set(job.url, data);
-    persist(job, { text, en: en || null, es: es || null }, "ok");
+    persist(job, { text, en: en || null, es: es || null, segments }, "ok");
     applyToLiveState(job.url, data);
     queued.delete(job.url);
     console.log(`[radio-tx] #${job.driverNumber ?? "?"}: ${text.slice(0, 90)}`);
@@ -320,7 +477,7 @@ async function runJob(job) {
       return;
     }
     memo.set(job.url, FAILED);
-    persist(job, { text: "", en: null, es: null }, "failed");
+    persist(job, { text: "", en: null, es: null, segments: null }, "failed");
   }
 }
 
@@ -334,6 +491,7 @@ function persist(job, data, status) {
       text: data.text,
       textEn: data.en,
       textEs: data.es,
+      segments: data.segments && data.segments.length ? data.segments : null,
       model: MODEL,
       status,
       attempts: 1,
@@ -351,7 +509,7 @@ function applyToLiveState(url, data) {
   if (apply(entry, data) && liveBroadcast) liveBroadcast("update", liveState);
 }
 
-async function transcribeClip(url) {
+async function transcribeClip(url, job) {
   const buffer = await fetchAudio(url);
   const form = new FormData();
   let name = "radio.mp3";
@@ -363,8 +521,32 @@ async function transcribeClip(url) {
   form.append("file", new Blob([buffer], { type: "audio/mpeg" }), name);
   form.append("model", MODEL);
   form.append("response_format", "json");
-  form.append("prompt", PROMPT);
-  if (LANGUAGE) form.append("language", LANGUAGE);
+
+  const keywords = job?.keywords?.length ? job.keywords : JARGON_KEYWORDS;
+  if (SUPPORTS_KEYWORDS) {
+    // Structured term hints — far stronger than naming them in the prompt.
+    for (const keyword of keywords) form.append("keywords[]", keyword);
+    form.append(
+      "prompt",
+      job?.context ? `${PROMPT} This clip: ${job.context}.` : PROMPT,
+    );
+    // `languages` replaces the singular `language` on this model; sending
+    // both is rejected.
+    const expected = LANGUAGE ? [LANGUAGE] : EXPECTED_LANGUAGES;
+    for (const code of expected) form.append("languages[]", code);
+  } else {
+    form.append(
+      "prompt",
+      [
+        PROMPT,
+        job?.context ? `This clip: ${job.context}.` : "",
+        keywords.join(", "),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    if (LANGUAGE) form.append("language", LANGUAGE);
+  }
 
   const res = await fetch(TRANSCRIBE_URL, {
     method: "POST",
@@ -432,9 +614,30 @@ async function translate(text, context) {
   const json = await res.json();
   const content = json.choices?.[0]?.message?.content || "{}";
   const parsed = JSON.parse(content);
+
+  const ROLES = new Set(["driver", "engineer", "unknown"]);
+  const segments = Array.isArray(parsed.segments)
+    ? parsed.segments
+        .map((seg) => ({
+          speaker: ROLES.has(seg?.speaker) ? seg.speaker : "unknown",
+          en: typeof seg?.en === "string" ? seg.en.trim() : "",
+          es: typeof seg?.es === "string" ? seg.es.trim() : "",
+        }))
+        .filter((seg) => seg.en || seg.es)
+    : [];
+  if (segments.length === 0) throw new Error("translate returned no segments");
+
   return {
-    en: typeof parsed.en === "string" ? parsed.en.trim() : "",
-    es: typeof parsed.es === "string" ? parsed.es.trim() : "",
+    segments,
+    // Flat renderings stay the contract for anything that shows one line.
+    en: segments
+      .map((seg) => seg.en)
+      .filter(Boolean)
+      .join(" "),
+    es: segments
+      .map((seg) => seg.es)
+      .filter(Boolean)
+      .join(" "),
   };
 }
 

@@ -9,6 +9,7 @@ import {
   TireInfo,
   WeatherData,
   RadioCapture,
+  RadioSegment,
   RaceControlMessage,
   CarData,
 } from "@/types/f1";
@@ -383,6 +384,9 @@ export function useF1DataSSE({
               transcript: str(r.transcript),
               transcriptEn: str(r.transcript_en),
               transcriptEs: str(r.transcript_es),
+              transcriptSegments: Array.isArray(r.transcript_segments)
+                ? (r.transcript_segments as RadioSegment[])
+                : undefined,
             }));
           // Merge by clip URL instead of first-wins: a transcript arrives on
           // a later frame than the clip.
@@ -403,6 +407,8 @@ export function useF1DataSSE({
                       capture.transcriptEn ?? existing.transcriptEn,
                     transcriptEs:
                       capture.transcriptEs ?? existing.transcriptEs,
+                    transcriptSegments:
+                      capture.transcriptSegments ?? existing.transcriptSegments,
                   }
                 : capture,
             );

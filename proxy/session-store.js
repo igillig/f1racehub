@@ -81,6 +81,8 @@ export function getDB() {
     db.exec(`ALTER TABLE radio_transcripts ADD COLUMN text_en TEXT`);
   if (!radioCols.includes("text_es"))
     db.exec(`ALTER TABLE radio_transcripts ADD COLUMN text_es TEXT`);
+  if (!radioCols.includes("segments"))
+    db.exec(`ALTER TABLE radio_transcripts ADD COLUMN segments TEXT`);
   console.log(`[session-db] SQLite open at ${DB_PATH}`);
   return db;
 }
@@ -305,6 +307,7 @@ export function saveRadioTranscript({
   text = "",
   textEn = null,
   textEs = null,
+  segments = null,
   model = null,
   status = "ok",
   attempts = 1,
@@ -313,8 +316,8 @@ export function saveRadioTranscript({
     .prepare(
       `INSERT INTO radio_transcripts
          (url, session_key, driver_number, utc, text, text_en, text_es,
-          model, status, attempts, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          segments, model, status, attempts, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(url) DO UPDATE SET
          session_key = excluded.session_key,
          driver_number = excluded.driver_number,
@@ -323,6 +326,7 @@ export function saveRadioTranscript({
          -- A translation pass that failed must not wipe one we already have.
          text_en = COALESCE(excluded.text_en, radio_transcripts.text_en),
          text_es = COALESCE(excluded.text_es, radio_transcripts.text_es),
+         segments = COALESCE(excluded.segments, radio_transcripts.segments),
          model = excluded.model,
          status = excluded.status,
          attempts = radio_transcripts.attempts + excluded.attempts,
@@ -336,6 +340,7 @@ export function saveRadioTranscript({
       text,
       textEn,
       textEs,
+      segments ? JSON.stringify(segments) : null,
       model,
       status,
       attempts,

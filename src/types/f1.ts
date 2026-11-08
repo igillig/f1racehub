@@ -82,6 +82,13 @@ export interface WeatherData {
   windSpeed: number;
 }
 
+/** One speaking turn inside a radio clip. */
+export interface RadioSegment {
+  speaker: "driver" | "engineer" | "unknown";
+  en: string;
+  es: string;
+}
+
 export interface RadioCapture {
   utc: string;
   racingNumber: string;
@@ -98,6 +105,12 @@ export interface RadioCapture {
   transcript?: string;
   transcriptEn?: string;
   transcriptEs?: string;
+  /**
+   * The clip split into speaking turns, when it has more than one voice.
+   * Absent for the usual single-turn clip — use `radioTurns()` rather than
+   * reading this directly.
+   */
+  transcriptSegments?: RadioSegment[];
 }
 
 export interface TeamRadio {
