@@ -21,11 +21,12 @@ import FeatureTour from "@/components/FeatureTour";
 import { useF1DataSSE } from "@/hooks/useF1DataSSE";
 import { useBroadcastDelay } from "@/hooks/useBroadcastDelay";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { radioCaption } from "@/lib/radioText";
 import { useTimingSplit } from "@/hooks/useTimingSplit";
 import { sectorCounts } from "@/lib/timingDensity";
 
 export default function DashboardPage() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   // How far behind live this viewer wants to be. It belongs to the browser, so
   // it is read here and handed to the stream rather than decided inside it.
   const delay = useBroadcastDelay();
@@ -124,11 +125,30 @@ export default function DashboardPage() {
 
     if (!msg && !radio) return null;
 
-    if (radio && radioTime > msgTime) {
+    // Strict recency alone buries every radio: race control talks constantly
+    // (pit lane clear, track limits, notes), so a clip that lands between two
+    // of those messages was on screen for a second or not at all. A fresh
+    // radio holds the strip for a few seconds unless something that actually
+    // changes the race arrives on top of it.
+    const RADIO_DWELL_MS = 20_000;
+    const majorMessage = (m: string) =>
+      /RED FLAG|SAFETY CAR|CHEQUERED|SUSPENDED|SESSION WILL|RESTART|GREEN LIGHT|ABORT/i.test(
+        m,
+      );
+    const radioIsFresh =
+      !!radio &&
+      Date.now() - radioTime < RADIO_DWELL_MS &&
+      !(msg && majorMessage(msg.message));
+
+    if (radio && (radioTime > msgTime || radioIsFresh)) {
       const driver = drivers.find((d) => d.driverNumber === radio.racingNumber);
+      const who = driver ? driver.code : `#${radio.racingNumber}`;
+      const caption = radioCaption(radio, language);
       return {
         label: t("alert.radio"),
-        text: driver ? driver.code : `#${radio.racingNumber}`,
+        // The caption lands a few seconds after the clip, so the strip shows
+        // the driver first and the words as soon as they exist.
+        text: caption ? `${who}: “${caption}”` : who,
         time: radio.utc,
         icon: "📻" as string | null,
         color: "text-purple-400",

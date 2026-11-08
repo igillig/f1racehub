@@ -86,6 +86,18 @@ export interface RadioCapture {
   utc: string;
   racingNumber: string;
   path: string;
+  /**
+   * Speech-to-text of the clip, filled in by the proxy. Arrives a few seconds
+   * after the clip itself (and instantly for anything already transcribed), so
+   * treat its absence as "not yet", not "never".
+   *
+   * `transcript` is verbatim — a radio spoken in Spanish stays in Spanish.
+   * The two others are that message rendered in each site language; read them
+   * through `radioCaption()` so a missing translation falls back to verbatim.
+   */
+  transcript?: string;
+  transcriptEn?: string;
+  transcriptEs?: string;
 }
 
 export interface TeamRadio {

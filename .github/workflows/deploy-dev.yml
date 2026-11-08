@@ -24,6 +24,7 @@ jobs:
           echo "OPENF1_PASSWORD=${{ secrets.OPENF1_PASSWORD }}" >> .env
           echo "REPLAY_SESSION_KEY=${{ vars.REPLAY_SESSION_KEY }}" >> .env
           echo "F1_LIVETIMING_TOKEN=${{ secrets.F1_LIVETIMING_TOKEN }}" >> .env
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
           echo "NEXT_PUBLIC_SITE_URL=https://dev.f1racehub.com" >> .env
           echo "DASHBOARD_PORT=3001" >> .env
           echo "PROXY_PORT=4001" >> .env

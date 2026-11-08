@@ -12,7 +12,11 @@ import {
   ensureLatestSessionArchived,
   isArchiveDownloading,
 } from "./session-downloader.js";
-import { listSessions } from "./session-store.js";
+import { listSessions, countRadioTranscripts } from "./session-store.js";
+import {
+  isTranscriptionEnabled,
+  resetTranscriptionCache,
+} from "./radio-transcriber.js";
 import { getCircuitMap } from "./circuit-map.js";
 import {
   startMQTT,
@@ -378,6 +382,9 @@ let sessionWatchdog = null;
 
 function clearCurrentState() {
   for (const key of Object.keys(currentState)) delete currentState[key];
+  // The clip cache is keyed by URL, but the pending queue belongs to the
+  // session being torn down — nothing is listening for those transcripts.
+  resetTranscriptionCache();
   broadcastSSE("reset", {});
 }
 
@@ -580,6 +587,18 @@ async function startFallbackNoLive() {
  * this used to take the process down, because the browser polls /health every
  * 15 s and the throw landed in an async handler with nothing to catch it.
  */
+// Cheap enough to compute per /health call: one indexed COUNT over a table
+// with a few thousand rows at most.
+function transcriptionHealth() {
+  const base = { enabled: isTranscriptionEnabled() };
+  if (!base.enabled) return base;
+  try {
+    return { ...base, cached: countRadioTranscripts() };
+  } catch (err) {
+    return { ...base, error: err.message };
+  }
+}
+
 function archiveHealth() {
   const base = {
     downloading: isArchiveDownloading(),
@@ -653,6 +672,7 @@ const handleRequest = async (req, res) => {
       // window is actually stored right now.
       streamDelay: streamBuffer.stats(),
       archive: archiveHealth(),
+      radioTranscription: transcriptionHealth(),
     };
     if (mode === "replay" && currentState.session) {
       health.replaySession = {

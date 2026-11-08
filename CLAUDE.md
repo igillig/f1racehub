@@ -10,18 +10,66 @@ Browser (Next.js 14)
        └─ Next.js rewrite → proxy:4000
             └─ proxy/server.js (Node.js)
                  ├─ stream-buffer.js  (rolling window of broadcast frames — delayed starts)
-                 ├─ f1dash-client.js  (SSE from f1-dash.com)
-                 ├─ mqtt-client.js    (OpenF1 MQTT — paid tier, primary live source)
+                 ├─ signalr-client.js (F1 oficial SignalR — ÚNICA fuente live)
+                 ├─ mqtt-client.js    (OpenF1 MQTT paid — código dormido, ver abajo)
                  ├─ live-polling.js   (OpenF1 REST polling — free, fallback)
+                 ├─ radio-transcriber.js (team radio → texto, OpenAI STT + cache SQLite)
                  └─ replay.js         (session replay — SQLite archive first, REST fallback)
                       ├─ session-store.js      (SQLite archive, better-sqlite3)
                       ├─ session-downloader.js (archives finished sessions, retention=3)
                       └─ openf1-rest.js        (shared auth-aware fetch)
 ```
 
-`openf1-client.js` was deleted — it was a broken placeholder. `mqtt-client.js` is the correct OpenF1 paid client.
+`openf1-client.js` and `f1dash-client.js` were deleted. `mqtt-client.js` is the correct OpenF1 paid client, but it is **no longer the live path** — see below.
 
 The proxy normalizes all sources into a single SSE stream. The frontend never talks directly to F1 APIs.
+
+## Fuente de datos en vivo: SignalR, y nada más
+
+**Estado actual (rama `release/production`, post-merge de `feature/signalr-only`): el vivo es 100% SignalR.** El tier pago de OpenF1 MQTT se dejó de usar.
+
+`signalr-client.js` cubre los 15 topics que antes se repartían entre dos fuentes:
+
+| Topic | Qué aporta | Procesado en vivo |
+|---|---|---|
+| `TimingData` | mini-sectores, tiempos de sector, in_pit, KnockedOut | sí |
+| `TimingStats` | mejores personales por sector | sí |
+| `TimingAppData` | compuesto + stint de neumáticos | sí |
+| `TrackStatus` | banderas, SC, VSC, roja | sí |
+| `ExtrapolatedClock` | tiempo restante de sesión | sí |
+| `LapCount` | vuelta actual / total de vueltas | sí |
+| `DriverList` | nombres, equipos, colores | sí |
+| `RaceControlMessages` | mensajes FIA con marshal sector | sí |
+| `WeatherData` | clima (mapeado a la forma de OpenF1 weather) | sí |
+| `TeamRadio` | URLs de audio | sí |
+| `Position.z` | x/y/z de cada auto → track map | sí (`locationSource = "signalr"`) |
+| `CarData.z` | rpm, speed, gear, throttle, brake, drs | sí (`currentState.car_data`) |
+| `SessionInfo` / `SessionData` | metadata y estado de sesión | sí |
+
+**El feed está cerrado desde 2025.** Es `/signalrcore` (SignalR Core, no el viejo `/signalr`) y requiere un JWT de login de formula1.com en `F1_LIVETIMING_TOKEN` (expira ~4 días; se renueva a mano). Detalles del protocolo que importan:
+
+- Mensajes delimitados por el record separator `0x1e`.
+- El `negotiate` devuelve una cookie de sticky session que el WebSocket **tiene** que devolver, o el load balancer rutea a otro nodo y no llega nada.
+- `User-Agent: BestHTTP` (el del cliente oficial).
+- `Position.z` y `CarData.z` están **gated por entitlement**: necesitan el subscription token interno del JWT enviado como `Authorization: Bearer`, y una cuenta **F1 TV Pro** (Access no alcanza). Sin eso el feed conecta igual y esos dos topics entregan 0 mensajes.
+- `negotiate` 401 = token vencido → backoff de 5 min.
+- **Los timestamps vienen sin zona** (`2026-11-08T17:27:34`, sin `Z`) y tanto
+  Node como el browser los leen como hora **local**: en UTC-3 cada mensaje de
+  race control quedaba 3 h en el futuro, siempre más nuevo que la última radio
+  (el strip bajo el mapa nunca mostraba una) y con la hora mal impresa. Todo
+  `.Utc` del feed pasa por `toUtcISO()` (state-utils.js) antes de entrar al
+  estado.
+
+**Qué sigue usando OpenF1 (solo tier gratuito, nada en vivo):**
+
+- El archivo SQLite de sesiones para el modo replay/demo (`session-downloader.js`).
+- Calendario y próxima sesión (`src/lib/calendar.ts`, `src/hooks/useNextF1Session.ts`).
+- Standings del campeonato (`src/lib/championship.ts`).
+- `checkActiveSession()` en `mqtt-client.js`, que el watchdog sigue llamando.
+
+**`mqtt-client.js` y `live-polling.js` son código dormido**, no borrado: siguen alcanzables por `PROXY_MODE=mqtt` / `live-polling`, y `auto` los elige solo si hay credenciales de OpenF1. Sin `OPENF1_USERNAME`/`PASSWORD`, `auto` arranca SignalR directo.
+
+**⚠️ Hueco conocido en modo signalr-only:** ni el watchdog (`tryUpgradeToLive`) ni el supervisor de idle (`checkLiveSourceIdle`) contemplan SignalR — ambos chequean solo `isMQTTRunning()` / `isLivePollingRunning()`. Y `startSignalR()` reconecta con backoff pero nunca cae a replay. Consecuencia: entre sesiones el proxy puede quedar en `mode: "signalr-live"` sin datos y **sin banner de demo**. Si se toca esta zona, es lo primero a arreglar.
 
 ## Dev Setup
 
@@ -44,8 +92,10 @@ Copy `.env.example` → `.env` (frontend) and `proxy/.env.example` → `proxy/.e
 |---|---|
 | `src/hooks/useF1DataSSE.ts` | Main data hook — SSE connection, state, reconnect logic |
 | `proxy/server.js` | Proxy entry point — picks mode, starts SSE server |
-| `proxy/mqtt-client.js` | OpenF1 paid tier — OAuth2 + MQTT broker `mqtt.openf1.org:8883` |
+| `proxy/signalr-client.js` | **Fuente live única** — F1 oficial `/signalrcore`, JWT + sticky cookie, 15 topics |
+| `proxy/mqtt-client.js` | OpenF1 paid tier (dormido) — OAuth2 + MQTT `mqtt.openf1.org:8883`; aún provee `checkActiveSession()` |
 | `proxy/replay.js` | Historical replay — polls OpenF1 REST, auth-aware rate limits |
+| `proxy/radio-transcriber.js` | Transcribe cada clip de team radio (OpenAI STT) y cachea el texto en SQLite |
 | `proxy/stream-buffer.js` | Rolling window of broadcast frames + snapshots — serves delayed viewers their starting point |
 | `src/hooks/useBroadcastDelay.ts` | Per-browser "how far behind live" preference (0–60s) |
 | `src/lib/frameQueue.ts` | Frames received but not due yet |
@@ -61,15 +111,22 @@ Set `PROXY_MODE` in `proxy/.env`:
 
 | Mode | Source | Needs credentials? |
 |---|---|---|
-| `mqtt` / `openf1` | OpenF1 MQTT (paid, real-time push) | Yes (`OPENF1_USERNAME/PASSWORD`) |
-| `f1dash` | f1-dash.com SSE | No |
+| `signalr` | **F1 oficial SignalR — el modo en producción** | Yes (`F1_LIVETIMING_TOKEN`) |
+| `mqtt` / `openf1` | OpenF1 MQTT (paid, dormido) + SignalR en paralelo | Yes (`OPENF1_USERNAME/PASSWORD`) |
 | `live-polling` | OpenF1 REST API | No |
 | `replay` | OpenF1 historical data (Baku 2024) | No |
-| `auto` | MQTT → f1dash → live-polling → replay | Depends |
+| `auto` | MQTT (si hay creds) → SignalR (si hay token F1) → live-polling → replay | Depends |
 
-**Auto mode fallback chain**: checks for MQTT credentials first; if none, tries f1dash for 20s, then live-polling, then replay.
+**Auto mode fallback chain**: `hasMQTTCredentials()` → MQTT + SignalR en paralelo. Si no hay credenciales pero sí `F1_LIVETIMING_TOKEN` → **SignalR directo, sin chequear sesión** (`checkActiveSession()` devuelve `null` sin credenciales de OpenF1, así que se conecta y se deja que el feed reporte lo que haya en el aire). Sin token ni credenciales → `checkActiveSession()` y live-polling, o replay.
 
 **No active session**: when `date_end` of the latest session is >30 min in the past, `checkActiveSession()` returns false and the proxy falls back to replay automatically.
+
+**Radios de la sesión anterior**: `session_key=latest` de OpenF1 laguea al
+empezar una sesión, así que la carga histórica puede traer las radios de la
+sesión previa, y `currentState.team_radio` sobrevive al cambio de sesión.
+`pruneStaleRadios(state)` (state-utils.js) descarta todo clip anterior a
+`session.date_start - 10 min` y corre en cada push de radio; el hook del
+frontend filtra igual, porque una pestaña abierta cruza el cambio de sesión.
 
 **Session watchdog**: when the proxy falls back to replay, a watchdog timer fires every 60s and calls `checkActiveSession()`. As soon as a live session appears in the OpenF1 API (typically at session start), the watchdog stops replay, clears state, and starts MQTT+SignalR automatically. This prevents the common failure where the proxy starts during a break between sessions and stays in replay for the entire next session.
 
@@ -98,6 +155,57 @@ Set `PROXY_MODE` in `proxy/.env`:
 - REST streaming fallback (only if the archive download fails): paid 6s cycle / 800ms delays, free 4s / 1800ms.
 - **Replay loops**: when the replay clock passes the last data point (+60s buffer), it broadcasts `reset` and restarts from the beginning. End is data-driven in DB mode (max ts across laps/location/position/intervals), `date_end` in REST mode. A generation counter (`replayGeneration`) kills stale poll chains across restarts.
 - Archived `drivers` get team info backfilled (OpenF1 returns null colours right after a session): pass 1 from the newest archived session, pass 2 from `/v1/drivers?driver_number=N` history (rookies). Drivers topic has `maxAttempts: 12` in the verify pass since colours can take hours to consolidate upstream.
+
+## Transcripción de team radio
+
+Cada clip de radio se transcribe una sola vez y el texto viaja en el mismo
+estado SSE, así que se muestra al lado del audio en la lista de radios y en el
+`AlertStrip`. Tres campos por clip:
+
+| Campo | Qué es |
+|---|---|
+| `transcript` | Verbatim: una radio en español queda en español |
+| `transcript_en` | El mensaje en inglés |
+| `transcript_es` | El mensaje en español latino |
+
+En el `AlertStrip` una radio nueva **retiene el strip 20 s** aunque llegue un
+mensaje de race control después (salvo bandera roja, SC, bandera a cuadros y
+compañía): por recencia estricta quedaba tapada al instante, porque race
+control habla todo el tiempo.
+
+El cliente elige con `radioCaption(radio, language)` (`src/lib/radioText.ts`),
+que cae al verbatim si falta la traducción. La traducción es **por sentido, no
+literal** ("slow grip" → "poco agarre", no "agarré lento"), con el piloto, la
+sesión y la vuelta como contexto en el prompt, tuteo neutro y pretérito simple
+(nada de voseo ni de "ha ido empeorando").
+
+- **Dónde**: `proxy/radio-transcriber.js`. Cada fuente que empuja un clip
+  (`signalr-client`, `mqtt-client`, `live-polling`, `replay`) llama a
+  `enrichRadios(state, broadcastFn)`. Lo cacheado se adjunta en el acto; lo que
+  falta se encola (concurrencia 2, 3 intentos) y aterriza en un frame posterior.
+  Nunca bloquea el camino del dato en vivo.
+- **Cache**: tabla `radio_transcripts` en el mismo SQLite del archivo de
+  sesiones, **keyeada por la URL del clip** y no podada por la retención de 3
+  sesiones. Un replay en loop paga la transcripción una vez; después es gratis.
+  `status`: `ok` | `empty` (sin voz / ruido filtrado) | `failed` (con `attempts`
+  para no reintentar para siempre entre reinicios).
+- **Config** (`proxy/.env`): `OPENAI_API_KEY` (sin key la feature queda
+  apagada y la UI muestra el clip sin texto), `OPENAI_TRANSCRIBE_MODEL`
+  (default `gpt-4o-mini-transcribe`), `OPENAI_TRANSCRIBE_LANGUAGE` (vacío =
+  autodetect, que es lo que mantiene las radios en español/italiano en su
+  idioma), `RADIO_TRANSCRIBE=false` para apagarla sin sacar la key.
+- **Dos llamadas por clip**: speech-to-text y una de chat
+  (`OPENAI_TRANSLATE_MODEL`, default `gpt-4o-mini`) que devuelve
+  `{en, es}` en un solo JSON. Si la traducción falla queda solo el verbatim y
+  se reintenta una vez por arranque del proxy, no en loop.
+- `/health` expone `radioTranscription: { enabled, cached: {total, ok, empty, failed, translated} }`.
+- Si se cambia el prompt de traducción, las filas viejas siguen con el texto
+  viejo: `UPDATE radio_transcripts SET text_es = NULL` y reiniciar el proxy
+  las vuelve a traducir (el cache en memoria se limpia al arrancar).
+- Los modelos alucinan frases fijas sobre silencio ("you", "thank you");
+  esas se descartan y se guardan como `empty`. Cuando el filtro descarta algo
+  lo loguea (`discarded as noise`), que es la única forma de notar un falso
+  positivo.
 
 ## Broadcast delay (viewer-set, 0–60s)
 
@@ -132,7 +240,9 @@ delay never multiplies work on the server.
 
 ## Frontend — `proxyMode` and Demo Banner
 
-`useF1DataSSE.ts` polls `/health` and reads `data.mode`. When `proxyMode === "replay"`, `page.tsx` shows a yellow banner: **"Modo Demo: Datos en vivo no disponibles. Mostrando sesión grabada."**
+`useF1DataSSE.ts` polls `/health` and reads `data.mode`. Valores posibles: `signalr-live` (producción), `mqtt-live`, `live-polling`, `replay`, `standby`, `unknown`. When `proxyMode === "replay"`, `page.tsx` shows a yellow banner: **"Modo Demo: Datos en vivo no disponibles. Mostrando sesión grabada."**
+
+`signalrDegraded` trata `mqtt-live` y `signalr-live` como modos en vivo; si hay sesión en vivo y SignalR está caído, se muestra el banner de degradado.
 
 `isLive` in `sessionInfo` derives from `SessionInfo.EndDate`: if set and >30 min ago → false. Affects `TrackMap` behavior.
 
@@ -143,10 +253,10 @@ delay never multiplies work on the server.
 | `[proxy]` | server.js startup/shutdown |
 | `[proxy-sse]` | SSE client connect/disconnect |
 | `[openf1-mqtt]` | mqtt-client.js |
-| `[f1dash]` | f1dash-client.js |
 | `[live-polling]` | live-polling.js |
 | `[Replay]` | replay.js |
-| `[signalr]` | direct F1 SignalR mode |
+| `[signalr]` | signalr-client.js — fuente live |
+| `[radio-tx]` | radio-transcriber.js — transcripción de team radio |
 
 ## Tech Stack
 
@@ -213,21 +323,25 @@ El objetivo central del dashboard es mostrar telemetría **lo más en vivo posib
 | InPit / PitOut en tiempo real | SignalR | OpenF1 MQTT/REST solo confirma el stop cuando ya terminó |
 | KnockedOut en clasificación | SignalR | No existe en OpenF1 |
 | Tiempo restante de sesión | SignalR | OpenF1 no lo provee |
-| Posición en carrera | SignalR (prioritaria) | Más confiable y más rápida que MQTT |
-| Location x/y para track map | OpenF1 MQTT | SignalR no lo tiene |
-| Neumáticos / stints | OpenF1 MQTT | SignalR no lo tiene |
-| Team radio | OpenF1 MQTT | SignalR no lo tiene |
-| Clima | OpenF1 MQTT | SignalR no lo tiene |
-| Car data (RPM, velocidad) | OpenF1 MQTT | SignalR no lo tiene |
+| Posición en carrera | SignalR | Más confiable y más rápida que MQTT |
+| Location x/y para track map | SignalR `Position.z` | Requiere F1 TV Pro; el location live de OpenF1 era inestable |
+| Neumáticos / stints | SignalR `TimingAppData` | Llega en el momento, no al cerrar la vuelta |
+| Team radio | SignalR `TeamRadio` | URLs del media server oficial |
+| Clima | SignalR `WeatherData` | Normalizado a la forma de OpenF1 weather |
+| Car data (RPM, velocidad) | SignalR `CarData.z` | Requiere F1 TV Pro; canales 0/2/3/4/5 (sin DRS en 2026) |
 
 La única excepción es el **retraso de transmisión** que configura cada
 espectador (ver más arriba): el dato sigue llegando lo más rápido posible y la
 espera ocurre en el browser, nunca en la captura.
 
-**SignalR** = `livetiming.formula1.com` — feed oficial de la F1, gratuito, WebSocket, datos por evento (no polling).
-**OpenF1 MQTT** = paid tier, push-based, rico en datos pero segmentos/sectores solo llegan al completar la vuelta.
+Todo lo de la tabla sale hoy de una sola fuente: SignalR. La tabla queda porque
+explica **por qué** se dejó OpenF1 MQTT, y porque la columna "fuente correcta"
+es la regla a respetar si alguna vez se reactiva el código dormido.
 
-En modo live, ambos corren en paralelo. SignalR no puede ser sobreescrito por datos de OpenF1 para los campos que gestiona (segmentos, sectores, track_status, clock, in_pit).
+**SignalR** = `livetiming.formula1.com/signalrcore` — feed oficial de la F1, WebSocket, datos por evento (no polling). **Gratuito pero con auth desde 2025**, y los topics de GPS/telemetría piden F1 TV Pro.
+**OpenF1 MQTT** = paid tier, push-based, segmentos/sectores solo al completar la vuelta. **Ya no se usa en vivo.**
+
+Si el modo híbrido se reactiva (`PROXY_MODE=mqtt`), la regla sigue siendo: SignalR no puede ser sobreescrito por datos de OpenF1 para los campos que gestiona (segmentos, sectores, track_status, clock, in_pit, posición).
 
 ## Conventions
 

@@ -56,7 +56,31 @@ export function getDB() {
     );
     CREATE INDEX IF NOT EXISTS idx_events_lookup
       ON session_events (session_key, topic, ts);
+    -- Speech-to-text for team radio clips, keyed by the clip URL so a replay
+    -- loop (or a restart) never pays to transcribe the same audio twice.
+    -- Not touched by the session retention prune: it is tiny and the clips
+    -- outlive the archived session they belong to.
+    CREATE TABLE IF NOT EXISTS radio_transcripts (
+      url TEXT PRIMARY KEY,
+      session_key INTEGER,
+      driver_number INTEGER,
+      utc TEXT,
+      text TEXT,
+      model TEXT,
+      status TEXT NOT NULL DEFAULT 'ok',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT
+    );
   `);
+  // Added after the table shipped: an existing archive needs the columns.
+  const radioCols = db
+    .prepare(`PRAGMA table_info(radio_transcripts)`)
+    .all()
+    .map((c) => c.name);
+  if (!radioCols.includes("text_en"))
+    db.exec(`ALTER TABLE radio_transcripts ADD COLUMN text_en TEXT`);
+  if (!radioCols.includes("text_es"))
+    db.exec(`ALTER TABLE radio_transcripts ADD COLUMN text_es TEXT`);
   console.log(`[session-db] SQLite open at ${DB_PATH}`);
   return db;
 }
@@ -257,4 +281,81 @@ export function getSignalRWindow(sessionKey, topic, start, end) {
     )
     .all(sessionKey, `signalr:${topic}`, s, e)
     .map((r) => JSON.parse(r.payload));
+}
+
+// ── Team radio transcripts ────────────────────────────────────────────────────
+// One row per clip URL. `status`: ok (text available), empty (no speech in the
+// clip), failed (transcription gave up — `attempts` stops the retry loop).
+// `text` is the verbatim transcript in whatever language was spoken; text_en /
+// text_es are the two renderings the UI picks from by viewer language.
+
+export function getRadioTranscript(url) {
+  return (
+    getDB()
+      .prepare(`SELECT * FROM radio_transcripts WHERE url = ?`)
+      .get(url) || null
+  );
+}
+
+export function saveRadioTranscript({
+  url,
+  sessionKey = null,
+  driverNumber = null,
+  utc = null,
+  text = "",
+  textEn = null,
+  textEs = null,
+  model = null,
+  status = "ok",
+  attempts = 1,
+}) {
+  getDB()
+    .prepare(
+      `INSERT INTO radio_transcripts
+         (url, session_key, driver_number, utc, text, text_en, text_es,
+          model, status, attempts, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(url) DO UPDATE SET
+         session_key = excluded.session_key,
+         driver_number = excluded.driver_number,
+         utc = excluded.utc,
+         text = excluded.text,
+         -- A translation pass that failed must not wipe one we already have.
+         text_en = COALESCE(excluded.text_en, radio_transcripts.text_en),
+         text_es = COALESCE(excluded.text_es, radio_transcripts.text_es),
+         model = excluded.model,
+         status = excluded.status,
+         attempts = radio_transcripts.attempts + excluded.attempts,
+         created_at = excluded.created_at`,
+    )
+    .run(
+      url,
+      sessionKey,
+      driverNumber,
+      utc,
+      text,
+      textEn,
+      textEs,
+      model,
+      status,
+      attempts,
+      new Date().toISOString(),
+    );
+}
+
+export function countRadioTranscripts() {
+  return (
+    getDB()
+      .prepare(
+        `SELECT
+           COUNT(*) AS total,
+           SUM(status = 'ok') AS ok,
+           SUM(status = 'empty') AS empty,
+           SUM(status = 'failed') AS failed,
+           SUM(status = 'ok' AND text_en IS NOT NULL AND text_es IS NOT NULL)
+             AS translated
+         FROM radio_transcripts`,
+      )
+      .get() || { total: 0, ok: 0, empty: 0, failed: 0, translated: 0 }
+  );
 }

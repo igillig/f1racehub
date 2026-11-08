@@ -4,6 +4,7 @@ import { RadioCapture, Driver } from "@/types/f1";
 import { TEAM_COLORS } from "@/lib/constants";
 import { useState, useRef, useEffect } from "react";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { radioCaption } from "@/lib/radioText";
 import DriverTag from "./DriverTag";
 
 interface TeamRadiosProps {
@@ -96,8 +97,10 @@ function LoadingIcon() {
 }
 
 export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
-  const { t } = useLanguage();
-  const [playingIndex, setPlayingIndex] = useState<number | null>(null);
+  const { t, language } = useLanguage();
+  // Keyed by clip URL, not list index: a new radio landing during playback
+  // shifts every index down and the highlight used to jump to another clip.
+  const [playingPath, setPlayingPath] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isActuallyPlaying, setIsActuallyPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -111,18 +114,18 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
   }, []);
 
   const resetPlayback = () => {
-    setPlayingIndex(null);
+    setPlayingPath(null);
     setIsLoading(false);
     setIsActuallyPlaying(false);
     setProgress(0);
   };
 
-  const handlePlay = async (index: number, path: string) => {
+  const handlePlay = async (path: string) => {
     const audio = audioRef.current;
     if (!audio) return;
 
     // Clicking the clip that's already playing stops it
-    if (playingIndex === index) {
+    if (playingPath === path) {
       audio.pause();
       resetPlayback();
       return;
@@ -130,7 +133,7 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
 
     setIsLoading(true);
     setIsActuallyPlaying(false);
-    setPlayingIndex(index);
+    setPlayingPath(path);
     setProgress(0);
 
     try {
@@ -180,15 +183,21 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
           radios.map((radio, index) => {
             const driverInfo = getDriverInfo(radio.racingNumber);
             const teamColor = TEAM_COLORS[driverInfo.team] || "#888";
-            const isPlaying = playingIndex === index;
+            const isPlaying = playingPath === radio.path;
+            const caption = radioCaption(radio, language);
+            // Only a clip that just arrived can still be with the
+            // transcriber; an old one without text is one that has none.
+            const awaitingTranscript =
+              !caption &&
+              Date.now() - new Date(radio.utc).getTime() < 120_000;
 
             return (
               <div
                 key={`${radio.path}-${index}`}
-                className={`flex items-center gap-3 px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer ${
+                className={`flex items-start gap-3 px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors cursor-pointer ${
                   isPlaying ? "bg-zinc-800/50" : ""
                 }`}
-                onClick={() => handlePlay(index, radio.path)}
+                onClick={() => handlePlay(radio.path)}
               >
                 {/* Play/Stop button - cleaner design */}
                 <button
@@ -208,58 +217,61 @@ export default function TeamRadios({ radios, drivers }: TeamRadiosProps) {
                 </button>
 
                 {/* Driver info */}
-                <DriverTag
-                  code={driverInfo.code}
-                  team={driverInfo.team}
-                  size="sm"
-                  showLogo={false}
-                />
+                <div className="shrink-0 mt-0.5">
+                  <DriverTag
+                    code={driverInfo.code}
+                    team={driverInfo.team}
+                    size="sm"
+                    showLogo={false}
+                  />
+                </div>
 
-                {/* Progress bar with waveform effect */}
-                <div className="flex-1 flex items-center gap-2 min-w-0">
-                  {isPlaying && isActuallyPlaying ? (
-                    <>
-                      {/* Waveform animation */}
-                      <AudioWaveform color={teamColor} isAnimating={true} />
-                      {/* Progress bar */}
-                      <div className="flex-1 h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all duration-100"
-                          style={{
-                            width: `${progress}%`,
-                            backgroundColor: teamColor,
-                          }}
-                        />
-                      </div>
-                    </>
-                  ) : isPlaying && isLoading ? (
-                    <>
-                      {/* Loading state with pulsing waveform */}
-                      <AudioWaveform color={teamColor} isAnimating={true} />
-                      <div className="flex-1 h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
-                        <div
-                          className="h-full rounded-full animate-pulse"
-                          style={{
-                            width: "100%",
-                            backgroundColor: `${teamColor}40`,
-                          }}
-                        />
-                      </div>
-                    </>
+                {/* Transcript + playback progress */}
+                <div className="flex-1 min-w-0 flex flex-col gap-1 py-0.5">
+                  {caption ? (
+                    <p
+                      className="text-[11px] leading-snug text-zinc-300 line-clamp-2"
+                      title={caption}
+                    >
+                      {caption}
+                    </p>
                   ) : (
-                    <>
-                      {/* Static waveform */}
-                      <AudioWaveform color={teamColor} isAnimating={false} />
-                      {/* Empty progress bar */}
-                      <div className="flex-1 h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
-                        <div className="h-full w-0" />
-                      </div>
-                    </>
+                    // No caption yet: the clip is still with the transcriber,
+                    // or transcription is off. Either way the row keeps the
+                    // waveform it has always had.
+                    <div className="flex items-center gap-2">
+                      <AudioWaveform
+                        color={teamColor}
+                        isAnimating={isPlaying && isActuallyPlaying}
+                      />
+                      {awaitingTranscript && (
+                        <span className="text-[10px] text-zinc-600 italic truncate">
+                          {t("teamRadios.transcribing")}
+                        </span>
+                      )}
+                    </div>
                   )}
+
+                  <div className="h-1.5 bg-zinc-700/50 rounded-full overflow-hidden">
+                    {isPlaying && isLoading ? (
+                      <div
+                        className="h-full w-full rounded-full animate-pulse"
+                        style={{ backgroundColor: `${teamColor}40` }}
+                      />
+                    ) : (
+                      <div
+                        className="h-full rounded-full transition-all duration-100"
+                        style={{
+                          width: isPlaying ? `${progress}%` : "0%",
+                          backgroundColor: teamColor,
+                        }}
+                      />
+                    )}
+                  </div>
                 </div>
 
                 {/* Time ago */}
-                <span className="text-[10px] text-zinc-500 tabular-nums flex-shrink-0">
+                <span className="text-[10px] text-zinc-500 tabular-nums flex-shrink-0 mt-1">
                   {formatTimeAgo(radio.utc)}
                 </span>
               </div>

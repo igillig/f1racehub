@@ -140,3 +140,48 @@ export function keepFirstSegment(segments) {
   if (segments[0] != null) reset[0] = segments[0];
   return reset;
 }
+
+/**
+ * Drop team radio clips that belong to an earlier session.
+ *
+ * Two ways they get in: OpenF1's `session_key=latest` lags at the start of a
+ * weekend session, so the historical REST load can pull the previous session's
+ * radios; and `currentState.team_radio` survives a session rolling over, so
+ * yesterday's qualifying clips sit at the bottom of the list all race.
+ *
+ * 10 minutes of slack before `date_start` — the feed carries installation-lap
+ * and grid chatter from just before the session officially opens.
+ */
+export function pruneStaleRadios(state) {
+  const start = state?.session?.date_start;
+  if (!start || !Array.isArray(state.team_radio)) return false;
+  const cutoff = new Date(start).getTime() - 10 * 60 * 1000;
+  if (!Number.isFinite(cutoff)) return false;
+
+  const before = state.team_radio.length;
+  state.team_radio = state.team_radio.filter((radio) => {
+    const ts = new Date(radio?.date).getTime();
+    // A clip with an unreadable date is kept: better a stray row than a
+    // silently emptied list if a source ever changes its date format.
+    return !Number.isFinite(ts) || ts >= cutoff;
+  });
+  return state.team_radio.length !== before;
+}
+
+/**
+ * Normalise a timestamp coming off the F1 SignalR feed to a real UTC instant.
+ *
+ * The feed sends some stamps bare — "2026-11-08T17:27:34" with no zone — and
+ * both JS and the browser read a bare stamp as LOCAL time. In UTC-3 that puts
+ * every race control message three hours in the future, so it always looked
+ * newer than the newest team radio clip and the alert strip under the map
+ * never showed a radio. Times rendered from those stamps were off by the
+ * viewer's offset too.
+ *
+ * No-op when the stamp already carries "Z" or an explicit offset.
+ */
+export function toUtcISO(value) {
+  if (typeof value !== "string" || value === "") return value;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(value)) return value;
+  return `${value}Z`;
+}

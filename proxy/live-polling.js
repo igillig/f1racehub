@@ -14,7 +14,9 @@ import {
   detectSafetyCar,
   queueLocationFix,
   mergeSegments,
+  pruneStaleRadios,
 } from "./state-utils.js";
+import { enrichRadios } from "./radio-transcriber.js";
 
 const API_BASE = "https://api.openf1.org/v1";
 
@@ -363,6 +365,8 @@ async function pollData() {
           console.log(
             `[live-polling] Team Radio: ${driverAcronym || radio.driver_number}`,
           );
+          pruneStaleRadios(currentStateRef);
+          enrichRadios(currentStateRef, broadcastFn);
         }
       }
     }
@@ -495,6 +499,8 @@ async function fetchHistoricalData(sessionKey) {
       if (currentStateRef.team_radio.length > 30) {
         currentStateRef.team_radio = currentStateRef.team_radio.slice(-30);
       }
+      pruneStaleRadios(currentStateRef);
+      enrichRadios(currentStateRef, broadcastFn);
     }
   } catch (error) {
     console.error(

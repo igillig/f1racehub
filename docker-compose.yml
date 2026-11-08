@@ -19,6 +19,11 @@ services:
       - REPLAY_SESSION_KEY=${REPLAY_SESSION_KEY}
       - NODE_ENV=${NODE_ENV:-production}
       - F1_LIVETIMING_TOKEN=${F1_LIVETIMING_TOKEN}
+      # Team radio transcription. Unset = the clips play with no caption.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_TRANSCRIBE_MODEL=${OPENAI_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      - OPENAI_TRANSLATE_MODEL=${OPENAI_TRANSLATE_MODEL:-gpt-4o-mini}
+      - RADIO_TRANSCRIBE=${RADIO_TRANSCRIBE:-true}
       - DB_PATH=/app/data/f1-sessions.db
     volumes:
       - proxy-data:/app/data

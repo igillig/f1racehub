@@ -11,6 +11,7 @@
 
 import mqtt from "mqtt";
 import { isSignalRRunning } from "./signalr-client.js";
+import { enrichRadios } from "./radio-transcriber.js";
 import {
   ensureTimingEntry,
   updateBestLap,
@@ -20,6 +21,7 @@ import {
   queueLocationFix,
   mergeSegments,
   keepFirstSegment,
+  pruneStaleRadios,
 } from "./state-utils.js";
 
 // MQTT Configuration
@@ -611,6 +613,8 @@ function handleTeamRadio(data) {
       currentStateRef.team_radio = currentStateRef.team_radio.slice(-30);
     }
     console.log(`[openf1-mqtt] Team Radio: Driver ${data.driver_number}`);
+    pruneStaleRadios(currentStateRef);
+    enrichRadios(currentStateRef, broadcastFn);
   }
 }
 

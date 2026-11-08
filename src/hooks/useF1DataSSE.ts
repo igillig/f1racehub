@@ -229,6 +229,9 @@ export function useF1DataSSE({
 
   // Session type drives the sort order (Race vs Practice/Qualifying)
   const sessionTypeRef = useRef<string>("Race");
+  // Start of the session on air, in ms. Radio clips older than this belong to
+  // the previous session and are filtered out of the list.
+  const sessionStartRef = useRef<number | null>(null);
 
   // Fastest lap seen in this session (raw seconds), used to set lastLapOverallFastest
   const sessionFastestLapRef = useRef<number>(Infinity);
@@ -280,6 +283,15 @@ export function useF1DataSSE({
       if (sessionData || lapCount) {
         const sessionType = sessionData?.session_type;
         if (sessionType) sessionTypeRef.current = sessionType;
+
+        if (sessionData?.date_start) {
+          const started = new Date(sessionData.date_start).getTime();
+          // 10 min of slack: grid and installation-lap chatter comes in
+          // before the session officially opens.
+          sessionStartRef.current = Number.isFinite(started)
+            ? started - 10 * 60 * 1000
+            : null;
+        }
 
         const circuitShortName = sessionData?.circuit_short_name;
         const countryName =
@@ -358,6 +370,8 @@ export function useF1DataSSE({
 
       // ── 7. Team radio ────────────────────────────────────────────────────
       const teamRadioData = data.team_radio;
+      const str = (v: unknown): string | undefined =>
+        typeof v === "string" && v ? v : undefined;
       if (Array.isArray(teamRadioData) && teamRadioData.length > 0) {
         setTeamRadios((prev) => {
           const newCaptures: RadioCapture[] = teamRadioData
@@ -366,11 +380,43 @@ export function useF1DataSSE({
               utc: r.date,
               racingNumber: String(r.driver_number),
               path: r.recording_url, // already a full URL from OpenF1
+              transcript: str(r.transcript),
+              transcriptEn: str(r.transcript_en),
+              transcriptEs: str(r.transcript_es),
             }));
-          const merged = [...newCaptures, ...prev];
-          const unique = merged.filter(
-            (c, i) => merged.findIndex((x) => x.path === c.path) === i,
-          );
+          // Merge by clip URL instead of first-wins: a transcript arrives on
+          // a later frame than the clip.
+          const byPath = new Map<string, RadioCapture>();
+          for (const capture of [...prev, ...newCaptures]) {
+            const existing = byPath.get(capture.path);
+            byPath.set(
+              capture.path,
+              existing
+                ? {
+                    ...existing,
+                    ...capture,
+                    // A later frame can carry the clip with no caption at
+                    // all (state rebuilt after a proxy restart) — never let it
+                    // erase one we already have.
+                    transcript: capture.transcript ?? existing.transcript,
+                    transcriptEn:
+                      capture.transcriptEn ?? existing.transcriptEn,
+                    transcriptEs:
+                      capture.transcriptEs ?? existing.transcriptEs,
+                  }
+                : capture,
+            );
+          }
+          // Clips from the session before this one: OpenF1's `latest` lags
+          // at session start, so the historical load can pull yesterday's
+          // qualifying radios, and a tab left open across a session rollover
+          // keeps them on screen for the whole race.
+          const cutoff = sessionStartRef.current;
+          const unique = Array.from(byPath.values()).filter((c) => {
+            if (!cutoff) return true;
+            const t = new Date(c.utc).getTime();
+            return !Number.isFinite(t) || t >= cutoff;
+          });
           unique.sort(
             (a, b) => new Date(b.utc).getTime() - new Date(a.utc).getTime(),
           );

@@ -21,8 +21,14 @@
 
 import WebSocket from "ws";
 import zlib from "zlib";
-import { ensureTimingEntry, queueLocationFix } from "./state-utils.js";
+import {
+  ensureTimingEntry,
+  queueLocationFix,
+  pruneStaleRadios,
+  toUtcISO,
+} from "./state-utils.js";
 import { insertSignalREvent } from "./session-store.js";
+import { enrichRadios } from "./radio-transcriber.js";
 
 const SIGNALR_HOST = "livetiming.formula1.com";
 // SignalR Core (modern ASP.NET Core SignalR). Since ~2025 F1 migrated here and
@@ -412,7 +418,7 @@ function processTrackStatus(data) {
 function processExtrapolatedClock(data) {
   if (!currentStateRef || !data) return;
   const remaining = data.Remaining ?? data.remaining;
-  const utc = data.Utc ?? data.utc;
+  const utc = toUtcISO(data.Utc ?? data.utc);
   const extrapolating = data.Extrapolating ?? data.extrapolating ?? true;
   if (remaining && utc) {
     currentStateRef.clock = { remaining, utc, extrapolating };
@@ -608,7 +614,7 @@ function processTeamRadio(data) {
     const url = `https://livetiming.formula1.com/static/${f1SessionPath}${capture.Path}`;
     if (currentStateRef.team_radio.some((r) => r.recording_url === url)) continue;
     currentStateRef.team_radio.push({
-      date: capture.Utc,
+      date: toUtcISO(capture.Utc),
       driver_number: parseInt(capture.RacingNumber, 10) || null,
       recording_url: url,
     });
@@ -618,6 +624,10 @@ function processTeamRadio(data) {
     if (currentStateRef.team_radio.length > 30) {
       currentStateRef.team_radio = currentStateRef.team_radio.slice(-30);
     }
+    pruneStaleRadios(currentStateRef);
+    // Attaches any cached transcript right away and queues the new clips;
+    // the text lands on a later frame when the model answers.
+    enrichRadios(currentStateRef, broadcastFn);
     if (broadcastFn) broadcastFn("update", currentStateRef);
   }
 }
@@ -681,7 +691,7 @@ function processRaceControlMessages(data) {
   for (const msg of Object.values(data.Messages)) {
     if (!msg || !msg.Message) continue;
     const mapped = {
-      date: msg.Utc,
+      date: toUtcISO(msg.Utc),
       message: msg.Message,
       flag: msg.Flag || null,
       category: msg.Category || "Other",
@@ -744,7 +754,7 @@ function processCarData(data) {
   for (const frame of payload.Entries) {
     const cars = frame?.Cars;
     if (!cars || typeof cars !== "object") continue;
-    const date = frame.Utc;
+    const date = toUtcISO(frame.Utc);
     for (const [num, car] of Object.entries(cars)) {
       const ch = car?.Channels;
       if (!ch || typeof ch !== "object") continue;

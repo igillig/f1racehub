@@ -13,6 +13,7 @@
 import { hasMQTTCredentials } from "./mqtt-client.js";
 import { API_BASE, fetchJSON as fetchJSONShared, sleep } from "./openf1-rest.js";
 import * as store from "./session-store.js";
+import { enrichRadios } from "./radio-transcriber.js";
 import {
   downloadSessionByKey,
   findLatestFinishedSession,
@@ -23,6 +24,7 @@ import {
   flagToTrackStatus,
   detectSafetyCar,
   mergeSegments,
+  pruneStaleRadios,
 } from "./state-utils.js";
 
 // Session key — resolved at startup: latest race from OpenF1 > env var override > Baku 2024
@@ -596,6 +598,7 @@ function processData(data, state) {
 
   // team radio
   if (teamRadio && teamRadio.length > 0) {
+    let radiosAdded = false;
     teamRadio.forEach((radio) => {
       const exists = state.team_radio.some(
         (r) => r.recording_url === radio.recording_url,
@@ -613,8 +616,15 @@ function processData(data, state) {
         console.log(
           `[Replay] Team Radio: ${driver?.name_acronym || radio.driver_number}`,
         );
+        radiosAdded = true;
       }
     });
+    // Cached transcripts attach in place; a looping demo pays for the clip
+    // once and reads it from SQLite on every lap after that.
+    if (radiosAdded) {
+      pruneStaleRadios(state);
+      enrichRadios(state, broadcastFn);
+    }
   }
 
   return state;
