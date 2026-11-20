@@ -1,8 +1,14 @@
 name: Deploy f1-stats
 
+# Only release/* branches deploy. This used to trigger on `main`, and because
+# main lags behind release/production it redeployed the production stack with
+# an older docker-compose (container f1-proxy/f1-api instead of f1-prod-api,
+# and INTERNAL_PROXY_URL not passed as a build arg, so Next baked the stale
+# hostname into routes-manifest.json). Merging a PR into main was enough to
+# take the site down with `getaddrinfo ENOTFOUND f1-proxy`. Do not add main back.
 on:
   push:
-    branches: [ main ]
+    branches: [ release/production ]
 
 concurrency:
   group: deploy-production

@@ -2,7 +2,7 @@ name: Deploy f1-stats (dev)
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ release/dev ]
 
 concurrency:
   group: deploy-dev
