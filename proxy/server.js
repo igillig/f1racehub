@@ -12,7 +12,14 @@ import {
   ensureLatestSessionArchived,
   isArchiveDownloading,
 } from "./session-downloader.js";
-import { listSessions, countRadioTranscripts } from "./session-store.js";
+import {
+  listSessions,
+  countRadioTranscripts,
+  readOpenF1Cache,
+  readOpenF1CacheNewestForPath,
+  writeOpenF1Cache,
+  pruneOpenF1Cache,
+} from "./session-store.js";
 import {
   isTranscriptionEnabled,
   resetTranscriptionCache,
@@ -61,6 +68,53 @@ function pruneLandingViewers() {
   const cutoff = Date.now() - LANDING_TTL_MS;
   for (const [id, ts] of landingViewers) {
     if (ts < cutoff) landingViewers.delete(id);
+  }
+}
+
+// Read-through cache for the OpenF1 REST passthrough, keyed by path+query.
+// Absorbs landing-page polling from many viewers and, more importantly, keeps
+// the last good body around to serve when OpenF1 is down. Backed by SQLite
+// (openf1_cache) so a proxy restart doesn't start out with nothing to serve.
+const openf1Cache = new Map();
+const OPENF1_FRESH_MS = 30_000;
+
+// Endpoints whose query is a date range the client re-filters anyway, so the
+// newest stored body of the endpoint is a usable fallback even when its query
+// string differs. The landing's key rolls over at midnight
+// (`date_start>=<yesterday>`), which would otherwise orphan the stored body
+// exactly when OpenF1 being down matters most. championship_* is excluded on
+// purpose: it is keyed to a meeting, and serving another meeting's standings
+// would be wrong rather than merely stale.
+const OPENF1_QUERY_AGNOSTIC = new Set(["/api/sessions", "/api/meetings"]);
+
+/** Last good body for a request: memory first, then SQLite. */
+function lookupOpenF1Cache(cacheKey, pathname) {
+  const hot = openf1Cache.get(cacheKey);
+  if (hot) return hot;
+  try {
+    const row =
+      readOpenF1Cache(cacheKey) ||
+      (OPENF1_QUERY_AGNOSTIC.has(pathname)
+        ? readOpenF1CacheNewestForPath(pathname)
+        : null);
+    if (row) {
+      // Warm the hot map so a restart pays one SQLite read, not one per request.
+      openf1Cache.set(cacheKey, { body: row.body, ts: row.ts });
+      return { body: row.body, ts: row.ts };
+    }
+  } catch (err) {
+    console.warn(`[proxy] OpenF1 cache read failed: ${err.message}`);
+  }
+  return null;
+}
+
+function storeOpenF1Cache(cacheKey, pathname, body) {
+  openf1Cache.set(cacheKey, { body, ts: Date.now() });
+  try {
+    writeOpenF1Cache(cacheKey, pathname, body);
+  } catch (err) {
+    // A cache write must never fail the response it came from.
+    console.warn(`[proxy] OpenF1 cache write failed: ${err.message}`);
   }
 }
 
@@ -536,6 +590,15 @@ async function maintainSessionArchive() {
   } catch (err) {
     console.error("[proxy] Archive maintenance error:", err.message);
   }
+  // Piggybacks on the same timer: the landing's sessions key carries the
+  // current date, so without a prune the table grows by one row per day.
+  try {
+    const dropped = pruneOpenF1Cache();
+    if (dropped > 0)
+      console.log(`[proxy] Pruned ${dropped} stale OpenF1 cache row(s)`);
+  } catch (err) {
+    console.warn(`[proxy] OpenF1 cache prune failed: ${err.message}`);
+  }
 }
 
 // First check is delayed so it doesn't compete with the startup flow
@@ -885,6 +948,12 @@ const handleRequest = async (req, res) => {
   // Used by the landing (sessions) and the standings page (championship, etc.).
   // OpenF1 REST is FREE — kept in every mode including signalr-only, which only
   // drops the paid MQTT live source, not the free REST endpoints.
+  //
+  // Responses are cached per path+query: fresh for OPENF1_FRESH_MS, and the last
+  // good body is served as STALE when OpenF1 answers 5xx or times out. Without
+  // it the landing printed "Calendario no disponible" every time api.openf1.org
+  // had a wobble, and during a live session it answers 401 for its whole REST
+  // API (see the /api/state fallback in useNextF1Session).
   const OPENF1_PASSTHROUGH = [
     "/api/sessions",
     "/api/championship_drivers",
@@ -899,22 +968,52 @@ const handleRequest = async (req, res) => {
     const endpoint = passthrough.slice("/api/".length);
     const queryString = reqUrl.search;
     const upstreamUrl = `https://api.openf1.org/v1/${endpoint}${queryString}`;
+    const cacheKey = `${reqUrl.pathname}${queryString}`;
+    const sendJSON = (status, body, extra = {}) => {
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        ...extra,
+      });
+      res.end(body);
+    };
+    const cached = lookupOpenF1Cache(cacheKey, passthrough);
+    if (cached && Date.now() - cached.ts < OPENF1_FRESH_MS) {
+      sendJSON(200, cached.body, { "X-Cache": "HIT" });
+      return;
+    }
     try {
       const headers = { Accept: "application/json" };
       if (hasMQTTCredentials()) {
         const token = await ensureValidToken();
         headers["Authorization"] = `Bearer ${token}`;
       }
-      const upstreamRes = await fetch(upstreamUrl, { headers });
-      const body = await upstreamRes.text();
-      res.writeHead(upstreamRes.status, {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers,
+        signal: AbortSignal.timeout(8000),
       });
-      res.end(body);
+      const body = await upstreamRes.text();
+      if (upstreamRes.ok) {
+        storeOpenF1Cache(cacheKey, passthrough, body);
+        sendJSON(200, body, { "X-Cache": "MISS" });
+        return;
+      }
+      console.warn(`[proxy] OpenF1 ${endpoint} responded ${upstreamRes.status}`);
+      if (cached) {
+        sendJSON(200, cached.body, { "X-Cache": "STALE" });
+        return;
+      }
+      sendJSON(
+        upstreamRes.status,
+        JSON.stringify({ error: "upstream_error", status: upstreamRes.status }),
+      );
     } catch (err) {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "upstream_error", detail: err.message }));
+      console.warn(`[proxy] OpenF1 ${endpoint} failed: ${err.message}`);
+      if (cached) {
+        sendJSON(200, cached.body, { "X-Cache": "STALE" });
+        return;
+      }
+      sendJSON(502, JSON.stringify({ error: "upstream_error", detail: err.message }));
     }
     return;
   }

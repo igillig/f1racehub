@@ -60,6 +60,19 @@ export function getDB() {
     -- loop (or a restart) never pays to transcribe the same audio twice.
     -- Not touched by the session retention prune: it is tiny and the clips
     -- outlive the archived session they belong to.
+    -- Last good OpenF1 REST bodies, keyed by path+query. OpenF1 answers 401
+    -- for its whole REST API while a session is live, and 5xx when it wobbles,
+    -- which left the landing with "Calendario no disponible". The in-memory
+    -- cache in server.js covers a running proxy; this table covers a restart.
+    -- Not touched by the session retention prune (pruneOpenF1Cache handles it).
+    CREATE TABLE IF NOT EXISTS openf1_cache (
+      key TEXT PRIMARY KEY,
+      pathname TEXT NOT NULL,
+      body TEXT NOT NULL,
+      ts INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_openf1_cache_path
+      ON openf1_cache (pathname, ts DESC);
     CREATE TABLE IF NOT EXISTS radio_transcripts (
       url TEXT PRIMARY KEY,
       session_key INTEGER,
@@ -363,4 +376,48 @@ export function countRadioTranscripts() {
       )
       .get() || { total: 0, ok: 0, empty: 0, failed: 0, translated: 0 }
   );
+}
+
+// ── OpenF1 REST fallback cache ────────────────────────────────────────────────
+// The landing's sessions query carries a date filter (`date_start>=<yesterday>`)
+// so its key rolls over every midnight. Exact-key hits are preferred, but for
+// endpoints the client re-filters by date anyway (sessions, meetings) the newest
+// stored body of the same endpoint is a valid fallback: it is a superset shifted
+// by a day, and the client drops anything already finished.
+
+const OPENF1_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+export function readOpenF1Cache(key) {
+  const row = getDB()
+    .prepare(`SELECT body, ts FROM openf1_cache WHERE key = ?`)
+    .get(key);
+  return row || null;
+}
+
+/** Newest stored body for an endpoint, whatever its query string was. */
+export function readOpenF1CacheNewestForPath(pathname) {
+  const row = getDB()
+    .prepare(
+      `SELECT body, ts FROM openf1_cache WHERE pathname = ?
+       ORDER BY ts DESC LIMIT 1`,
+    )
+    .get(pathname);
+  return row || null;
+}
+
+export function writeOpenF1Cache(key, pathname, body) {
+  getDB()
+    .prepare(
+      `INSERT INTO openf1_cache (key, pathname, body, ts) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET body = excluded.body, ts = excluded.ts`,
+    )
+    .run(key, pathname, body, Date.now());
+}
+
+/** Drops rows older than two weeks so the daily sessions key can't pile up. */
+export function pruneOpenF1Cache() {
+  const cutoff = Date.now() - OPENF1_CACHE_MAX_AGE_MS;
+  return getDB()
+    .prepare(`DELETE FROM openf1_cache WHERE ts < ?`)
+    .run(cutoff).changes;
 }
