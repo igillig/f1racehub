@@ -82,7 +82,17 @@ export function useNextF1Session(): NextSessionState {
         fetch(fallback)
           .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
           .then(parse)
-          .catch(() => setLoading(false))
+          .catch(() =>
+            // Last resort: the proxy's current session (works even if OpenF1's
+            // schedule endpoint is down while a session is live).
+            fetch("/api/proxy/api/state")
+              .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
+              .then((state: { session?: OpenF1Session }) => {
+                if (state?.session?.date_end) parse([state.session]);
+                else setLoading(false);
+              })
+              .catch(() => setLoading(false))
+          )
       );
   }, []);
 

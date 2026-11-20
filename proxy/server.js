@@ -39,6 +39,10 @@ function pruneLandingViewers() {
   }
 }
 
+// Cache of OpenF1 /sessions responses keyed by query string (schedule fallback)
+const sessionsCache = new Map();
+const SESSIONS_FRESH_MS = 30_000; // absorbs landing-page polling from many viewers
+
 // Deep merge objects
 function deepMerge(target, source) {
   const result = { ...target };
@@ -302,26 +306,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Sessions proxy — forwards to OpenF1 with auth credentials when available
+  // Sessions proxy — forwards to OpenF1 with auth credentials when available.
+  // Successful responses are cached; if OpenF1 is down (503/502/timeout) we serve
+  // the last good response so the landing schedule keeps working.
   if (reqUrl.pathname.startsWith("/api/sessions")) {
     const queryString = reqUrl.search;
     const upstreamUrl = `https://api.openf1.org/v1/sessions${queryString}`;
+    const sendJSON = (status, body, extra = {}) => {
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        ...extra,
+      });
+      res.end(body);
+    };
+    const cached = sessionsCache.get(queryString);
+    if (cached && Date.now() - cached.ts < SESSIONS_FRESH_MS) {
+      sendJSON(200, cached.body, { "X-Cache": "HIT" });
+      return;
+    }
     try {
       const headers = { Accept: "application/json" };
       if (hasMQTTCredentials()) {
         const token = await ensureValidToken();
         headers["Authorization"] = `Bearer ${token}`;
       }
-      const upstreamRes = await fetch(upstreamUrl, { headers });
-      const body = await upstreamRes.text();
-      res.writeHead(upstreamRes.status, {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
+      const upstreamRes = await fetch(upstreamUrl, {
+        headers,
+        signal: AbortSignal.timeout(8000),
       });
-      res.end(body);
+      const body = await upstreamRes.text();
+      if (upstreamRes.ok) {
+        sessionsCache.set(queryString, { body, ts: Date.now() });
+        sendJSON(200, body, { "X-Cache": "MISS" });
+        return;
+      }
+      console.warn(`[proxy] OpenF1 sessions responded ${upstreamRes.status}`);
+      if (cached) {
+        sendJSON(200, cached.body, { "X-Cache": "STALE" });
+        return;
+      }
+      sendJSON(
+        upstreamRes.status,
+        JSON.stringify({ error: "upstream_error", status: upstreamRes.status }),
+      );
     } catch (err) {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "upstream_error", detail: err.message }));
+      console.warn(`[proxy] OpenF1 sessions failed: ${err.message}`);
+      if (cached) {
+        sendJSON(200, cached.body, { "X-Cache": "STALE" });
+        return;
+      }
+      sendJSON(502, JSON.stringify({ error: "upstream_error", detail: err.message }));
     }
     return;
   }
