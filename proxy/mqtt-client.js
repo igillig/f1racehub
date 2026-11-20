@@ -119,12 +119,17 @@ async function getAccessToken() {
   params.append("username", username);
   params.append("password", password);
 
+  // Timed out on purpose: this runs inline in the OpenF1 REST passthrough that
+  // serves the landing's calendar, and undici has no default request timeout
+  // (only a 300s headers timeout), so a hung token endpoint would hang the
+  // request until the edge gave up with a 502.
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: params,
+    signal: AbortSignal.timeout(10000),
   });
 
   if (!response.ok) {

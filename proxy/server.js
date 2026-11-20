@@ -985,8 +985,20 @@ const handleRequest = async (req, res) => {
     try {
       const headers = { Accept: "application/json" };
       if (hasMQTTCredentials()) {
-        const token = await ensureValidToken();
-        headers["Authorization"] = `Bearer ${token}`;
+        // Best effort only. These endpoints are on OpenF1's FREE tier — the
+        // token just buys a higher rate limit — so an expired or rejected
+        // token must not take the calendar down with it. Before this, a
+        // throw from ensureValidToken() skipped the request entirely and
+        // answered 502, which is one of the ways the landing ended up with
+        // "Calendario no disponible".
+        try {
+          const token = await ensureValidToken();
+          if (token) headers["Authorization"] = `Bearer ${token}`;
+        } catch (err) {
+          console.warn(
+            `[proxy] OpenF1 token unavailable, retrying anonymously: ${err.message}`,
+          );
+        }
       }
       const upstreamRes = await fetch(upstreamUrl, {
         headers,
