@@ -67,6 +67,30 @@ The proxy normalizes all sources into a single SSE stream. The frontend never ta
 - Standings del campeonato (`src/lib/championship.ts`).
 - `checkActiveSession()` en `mqtt-client.js`, que el watchdog sigue llamando.
 
+**El passthrough OpenF1 tiene cache persistido.** Las rutas de
+`OPENF1_PASSTHROUGH` en `server.js` (`sessions`, `championship_drivers`,
+`championship_teams`, `drivers`, `meetings`) pasan por un read-through cache:
+fresco 30 s en memoria, respaldado por la tabla `openf1_cache` del mismo SQLite
+del archivo de sesiones, timeout de 8 s hacia arriba, y el último body bueno se
+sirve como `X-Cache: STALE` si OpenF1 contesta 5xx/401 o no contesta. La landing
+mostraba "Calendario no disponible" en cada tos de api.openf1.org, y **OpenF1
+devuelve 401 para toda su REST mientras hay una sesión en vivo**. El cache en
+memoria solo servía a un proxy que ya había respondido una vez; un restart
+arrancaba sin nada, de ahí SQLite. Se poda a 14 días sobre el timer de
+`maintainSessionArchive()`.
+
+El detalle que importa: la landing pide `date_start>=<ayer>`, así que **su key
+rota a medianoche** y un cache por key exacta quedaría huérfano justo cuando
+OpenF1 caído importa. Por eso `OPENF1_QUERY_AGNOSTIC` (`sessions`, `meetings`)
+cae a la fila más nueva del mismo endpoint — el cliente re-filtra por fecha
+igual. `championship_*` está **excluido a propósito**: está atado a un meeting,
+y servir los standings de otro meeting sería incorrecto, no solo viejo.
+
+**SignalR no puede cubrir el calendario**: `SessionInfo` describe solo la sesión
+al aire y no hay topic de schedule entre los 15. Por eso el último recurso de
+`useNextF1Session.ts` es `/api/state` (la sesión actual del proxy), que solo
+ayuda si hay sesión en vivo.
+
 **`mqtt-client.js` y `live-polling.js` son código dormido**, no borrado: siguen alcanzables por `PROXY_MODE=mqtt` / `live-polling`, y `auto` los elige solo si hay credenciales de OpenF1. Sin `OPENF1_USERNAME`/`PASSWORD`, `auto` arranca SignalR directo.
 
 **⚠️ Hueco conocido en modo signalr-only:** ni el watchdog (`tryUpgradeToLive`) ni el supervisor de idle (`checkLiveSourceIdle`) contemplan SignalR — ambos chequean solo `isMQTTRunning()` / `isLivePollingRunning()`. Y `startSignalR()` reconecta con backoff pero nunca cae a replay. Consecuencia: entre sesiones el proxy puede quedar en `mode: "signalr-live"` sin datos y **sin banner de demo**. Si se toca esta zona, es lo primero a arreglar.
@@ -85,6 +109,31 @@ docker-compose up
 ```
 
 Copy `.env.example` → `.env` (frontend) and `proxy/.env.example` → `proxy/.env` (backend) before first run.
+
+## Deploy — solo las ramas `release/*`
+
+Un runner self-hosted (Raspberry) deploya con GitHub Actions:
+`release/production` → `deploy.yml` (stack `f1-prod-api` / `f1-prod-ui`,
+proyecto compose `f1racehub`), `release/dev` → `deploy-dev.yml`.
+**`main` no deploya, y no hay que volver a atarlo a producción.**
+
+Lo tenía: `deploy.yml` disparaba en `push: branches: [main]` con
+`environment: production`, pero main va muy atrás de `release/production` y
+nunca recibió `8e6c6c0` (contenedores `f1-api`/`f1-ui`, sin `name: f1racehub`,
+`INTERNAL_PROXY_URL` solo como env de runtime). Mergear un PR a main alcanzó
+para tirar el sitio: todo `/api/proxy/*` con 500 y
+`getaddrinfo ENOTFOUND f1-proxy`.
+
+**Por qué no lo arregla una env var:** Next.js evalúa los `rewrites` de
+`next.config.js` durante `next build` y bakea el destino en
+`routes-manifest.json`. `INTERNAL_PROXY_URL` **tiene** que ir como build arg
+(docker-compose.yml lo pasa por `args` y por `environment`); si falta en el
+build, queda compilado el default y ninguna variable de runtime lo cambia.
+
+Para recuperarse rápido de un deploy malo, re-correr una Action vieja exitosa
+reconstruye el stack bueno. Y ojo con el timing: un push a `release/production`
+rebuildea en la Raspberry y corta el SSE varios minutos — no hacerlo con una
+sesión en vivo al aire.
 
 ## Key Files
 
